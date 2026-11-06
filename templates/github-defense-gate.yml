@@ -54,13 +54,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Run Google OSV-Scanner Action
-        uses: google/osv-scanner-action@v1.9.0
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          scan-args: |-
-            --format=sarif
-            --output=osv-results.sarif
-            ./
+          python-version: '3.12'
+
+      - name: Run DEFCON-1 Google OSV Dependency Scanner
+        run: |
+          python ./scripts/check-dependencies-osv.py . --sarif osv-results.sarif
 
       - name: Upload OSV SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
@@ -80,7 +81,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Aqua Security Trivy (IaC & Dockerfile Scanner)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
           hide-progress: true
@@ -110,8 +111,6 @@ jobs:
         uses: trufflesecurity/trufflehog@v3.88.15
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
           extra_args: --only-verified
 
   agent-skills-audit:
