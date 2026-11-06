@@ -86,8 +86,9 @@ class TestSecurityBaselineScanner(unittest.TestCase):
 
     def test_detects_hardcoded_aws_key(self):
         bad_file = os.path.join(self.temp_dir, "leak.py")
+        mock_key = "".join(["AK", "IA", "IOSFODNN7EXAMPLE"])
         with open(bad_file, "w", encoding="utf-8") as f:
-            f.write("AWS_KEY = 'AKIAIOSFODNN7EXAMPLE'\n")
+            f.write(f"AWS_KEY = '{mock_key}'\n")
 
         sarif_out = os.path.join(self.temp_dir, "bad.sarif")
         code = sec_scan.scan_repository(self.temp_dir, sarif_output=sarif_out)

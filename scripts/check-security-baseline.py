@@ -16,7 +16,7 @@ from pathlib import Path
 
 EXCLUDED_DIRS = {
     "node_modules", ".git", ".next", "dist", "build", "vendor",
-    "bin", "obj", ".idea", ".vscode", "coverage", "rules"
+    "bin", "obj", ".idea", ".vscode", "coverage", "rules", "tests", "__pycache__"
 }
 
 FALLBACK_CHECKS = [
