@@ -49,12 +49,34 @@ if (-not $psExe) {
     $psExe = if ($IsWindows -or ($env:OS -like "*Windows*")) { "powershell" } else { "pwsh" }
 }
 
-function Invoke-ShellCommand {
+function Invoke-SafeCommand {
     param ([string]$Command)
-    if ($IsWindows -or ($env:OS -like "*Windows*")) {
-        cmd /c $Command
-    } else {
-        sh -c $Command
+    if (-not $Command) { return 0 }
+
+    # Parse executable and arguments safely without shell=True or cmd/sh
+    $parts = [System.Management.Automation.PsParser]::Tokenize($Command, [ref]$null) | ForEach-Object { $_.Content }
+    if ($parts.Count -eq 0) { return 0 }
+
+    $exe = $parts[0]
+    $cmdArgs = if ($parts.Count -gt 1) { $parts[1..($parts.Count - 1)] } else { @() }
+
+    try {
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $exe
+        $pinfo.Arguments = ($cmdArgs | ForEach-Object {
+            if ($_ -match '[\s"]') {
+                '"{0}"' -f ($_ -replace '"', '\"')
+            } else {
+                $_
+            }
+        }) -join ' '
+        $pinfo.UseShellExecute = $false
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        $proc.WaitForExit()
+        return $proc.ExitCode
+    } catch {
+        Write-Host ("[-] Process execution failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        return 1
     }
 }
 
@@ -81,8 +103,8 @@ Write-Host "[1/4] Baseline state cached." -ForegroundColor Green
 # 2. Functional Baseline Verification (Pre-patch check)
 if ($TestCommand) {
     Write-Host "[2/4] Running functional test baseline..." -ForegroundColor Gray
-    Invoke-ShellCommand $TestCommand
-    if ($LASTEXITCODE -ne 0) {
+    $baseExit = Invoke-SafeCommand $TestCommand
+    if ($baseExit -ne 0) {
         Write-Host "[-] [ABORT] Functional baseline tests failed BEFORE applying patch!" -ForegroundColor Red
         Write-Host "    Cannot establish a working baseline. Fix failing tests or use -AllowDirty." -ForegroundColor Red
         if (-not $AllowDirty) {
@@ -132,8 +154,8 @@ Write-Host "   -> Security defect verified ELIMINATED." -ForegroundColor Green
 # 4. Non-Regression Functional Verification (Did we break anything?)
 if ($TestCommand) {
     Write-Host "`n[4/4] Running Non-Regression Test Suite..." -ForegroundColor Cyan
-    Invoke-ShellCommand $TestCommand
-    if ($LASTEXITCODE -ne 0) {
+    $regExit = Invoke-SafeCommand $TestCommand
+    if ($regExit -ne 0) {
         Write-Host "`n[REJECTED] Functional regression detected! Tests failed after patch." -ForegroundColor Red
         Write-Host "Initiating immediate rollback..." -ForegroundColor Red
         Move-Item -Path $backupFile -Destination $TargetFile -Force

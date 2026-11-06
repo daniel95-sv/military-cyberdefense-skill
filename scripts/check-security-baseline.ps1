@@ -31,6 +31,7 @@ if ($GitDiff) {
 
 $script:issuesFound = 0
 $script:warningsFound = 0
+$script:unreadableFiles = @()
 $script:sarifResults = @()
 
 $excludedDirs = @(
@@ -129,8 +130,11 @@ function Test-RegexInFiles {
         $nameLower = $name.ToLower()
         
         $matches = ($Extensions.Count -eq 0) -or ($Extensions -contains $ext)
-        if (-not $matches -and ($Extensions -contains ".env")) {
+        if (-not $matches -and ($Category -eq "Secrets" -or ($Extensions -contains ".env"))) {
             if ($nameLower -eq ".env" -or $nameLower -like ".env.*" -or $nameLower -like "*.env") {
+                $matches = $true
+            }
+            if ($nameLower -in @(".npmrc", ".pypirc", ".htpasswd", "credentials", "id_rsa", "id_ed25519") -or $ext -in @(".pem", ".key", ".cert", ".crt")) {
                 $matches = $true
             }
         }
@@ -150,7 +154,7 @@ function Test-RegexInFiles {
     $matched = @()
     foreach ($file in $candidates) {
         try {
-            $lines = @(Get-Content -Path $file.FullName -ErrorAction SilentlyContinue)
+            $lines = @(Get-Content -Path $file.FullName -ErrorAction Stop)
             for ($i = 0; $i -lt $lines.Count; $i++) {
                 if ($lines[$i] -match $Regex) {
                     $matched += [PSCustomObject]@{
@@ -178,7 +182,11 @@ function Test-RegexInFiles {
                     }
                 }
             }
-        } catch {}
+        } catch {
+            if ($script:unreadableFiles -notcontains $file.FullName) {
+                $script:unreadableFiles += $file.FullName
+            }
+        }
     }
 
     if ($matched.Count -gt 0) {
@@ -240,8 +248,8 @@ if ($rulesFile) {
 if (-not $loadedSSOT) {
     Write-Host "--- 1. Scanning for Hardcoded Secrets & Credentials ---" -ForegroundColor Blue
     Test-RegexInFiles -RuleId "SEC-001" -Category "Secrets" -Description "Hardcoded Private Key Block" -Regex 'BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY' -Extensions @(".ts", ".js", ".json", ".env", ".py", ".dart", ".kt", ".swift", ".yml", ".yaml", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
-    Test-RegexInFiles -RuleId "SEC-002" -Category "Secrets" -Description "Hardcoded AWS Access Key" -Regex '(?i)AKIA[0-9A-Z]{16}' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
-    Test-RegexInFiles -RuleId "SEC-003" -Category "Secrets" -Description "Hardcoded Bearer or Secret Token" -Regex '(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\s*[:=]\s*[''"][a-zA-Z0-9_\-]{20,}[''"]' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php") -Severity "HIGH"
+    Test-RegexInFiles -RuleId "SEC-002" -Category "Secrets" -Description "Hardcoded AWS Access Key" -Regex '(?i)AKIA[0-9A-Z]{16}' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
+    Test-RegexInFiles -RuleId "SEC-003" -Category "Secrets" -Description "Hardcoded Bearer or Secret Token" -Regex '(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\s*[:=]\s*[''"][a-zA-Z0-9_\-]{20,}[''"]' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php") -Severity "HIGH"
     Test-RegexInFiles -RuleId "SEC-004" -Category "Secrets" -Description "Hardcoded GitHub Personal Token" -Regex 'ghp_[0-9a-zA-Z]{36}' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
     Test-RegexInFiles -RuleId "SEC-005" -Category "Secrets" -Description "Hardcoded Google / Gemini API Key" -Regex 'AIza[0-9A-Za-z\-_]{35}' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
     Test-RegexInFiles -RuleId "SEC-006" -Category "Secrets" -Description "Hardcoded Stripe Live Secret Key" -Regex 'sk_live_[0-9a-zA-Z]{24}' -Extensions @(".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php") -Severity "CRITICAL"
@@ -308,6 +316,10 @@ Write-Host (" Warnings / Medium Risks: {0}" -f $finalWarns) -ForegroundColor $(i
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 if ($finalIssues -eq 0 -and $finalWarns -eq 0) {
+    if ($script:unreadableFiles.Count -gt 0) {
+        Write-Host " STATUS: UNVERIFIED / WARNING. Some files could not be inspected." -ForegroundColor Yellow
+        exit 2
+    }
     Write-Host " STATUS: DEFCON-5 (COMPLIANT). No baseline violations detected." -ForegroundColor Green
     exit 0
 } else {

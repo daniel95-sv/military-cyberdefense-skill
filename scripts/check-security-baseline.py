@@ -23,13 +23,13 @@ EXCLUDED_DIRS = {
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Own internal definition files that contain scanner rule patterns and test mocks
 TOOL_INTERNAL_FILES = {
-    os.path.abspath(__file__),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.py")),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.ps1")),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "rules", "security-rules.json")),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "security-rules.json")),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".gitleaks.toml")),
-    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "templates", ".gitleaks.toml")),
+    os.path.normcase(os.path.abspath(__file__)),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.py"))),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.ps1"))),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "..", "rules", "security-rules.json"))),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "security-rules.json"))),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".gitleaks.toml"))),
+    os.path.normcase(os.path.abspath(os.path.join(SCRIPT_DIR, "..", "templates", ".gitleaks.toml"))),
 }
 
 FALLBACK_CHECKS = [
@@ -46,7 +46,7 @@ FALLBACK_CHECKS = [
         "category": "Secrets",
         "desc": "Hardcoded AWS Access Key",
         "regex": re.compile(r"AKIA[0-9A-Z]{16}"),
-        "exts": {".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"},
+        "exts": {".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"},
         "severity": "CRITICAL"
     },
     {
@@ -54,7 +54,7 @@ FALLBACK_CHECKS = [
         "category": "Secrets",
         "desc": "Hardcoded Bearer / Secret Token",
         "regex": re.compile(r"(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\s*[:=]\s*['\"][a-zA-Z0-9_\-]{20,}['\"]"),
-        "exts": {".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"},
+        "exts": {".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"},
         "severity": "HIGH"
     },
     {
@@ -289,7 +289,7 @@ def load_checks():
 
 CHECKS = load_checks()
 
-def file_matches_extensions(file_path: str, allowed_exts: set) -> bool:
+def file_matches_extensions(file_path: str, allowed_exts: set, category: str = None) -> bool:
     fname = os.path.basename(file_path)
     fname_lower = fname.lower()
     _, ext = os.path.splitext(file_path)
@@ -299,9 +299,13 @@ def file_matches_extensions(file_path: str, allowed_exts: set) -> bool:
     if ext_lower and ext_lower in allowed_exts:
         return True
 
-    # 2. Environment files (.env, .env.local, .env.production, app.env, etc.)
-    if ".env" in allowed_exts:
+    # 2. Category Secrets automatically inspects all dotfiles and credentials
+    if category == "Secrets" or ".env" in allowed_exts:
         if fname_lower == ".env" or fname_lower.startswith(".env.") or fname_lower.endswith(".env"):
+            return True
+        if fname_lower in (".npmrc", ".pypirc", ".htpasswd", "credentials", "id_rsa", "id_ed25519"):
+            return True
+        if ext_lower in (".pem", ".key", ".cert", ".crt", ".env"):
             return True
 
     # 3. Dockerfiles
@@ -326,6 +330,8 @@ def run_ast_analysis(file_path: str, content: str):
     - eval() / exec() dynamic evaluation
     - subprocess calls with shell=True
     - requests calls with verify=False
+    - pickle.loads / pickle.load unsafe deserialization
+    - yaml.load with unsafe loader
     - raw SQL formatting in execute calls
     """
     ast_findings = []
@@ -337,10 +343,13 @@ def run_ast_analysis(file_path: str, content: str):
     class SecurityVisitor(ast.NodeVisitor):
         def visit_Call(self, node):
             func_name = None
+            module_name = None
             if isinstance(node.func, ast.Name):
                 func_name = node.func.id
             elif isinstance(node.func, ast.Attribute):
                 func_name = node.func.attr
+                if isinstance(node.func.value, ast.Name):
+                    module_name = node.func.value.id
 
             # 1. eval / exec
             if func_name in ("eval", "exec") and isinstance(node.func, ast.Name):
@@ -379,7 +388,37 @@ def run_ast_analysis(file_path: str, content: str):
                             "text": f"{func_name}(..., verify=False)"
                         })
 
-            # 4. execute with raw string interpolation
+            # 4. pickle unsafe deserialization
+            if module_name in ("pickle", "_pickle") and func_name in ("loads", "load"):
+                ast_findings.append({
+                    "id": "AST-SER-001",
+                    "category": "Deserialization/AST",
+                    "desc": f"Arbitrary code execution risk: untrusted deserialization via pickle.{func_name}()",
+                    "severity": "CRITICAL",
+                    "line": getattr(node, "lineno", 1),
+                    "text": f"pickle.{func_name}(...)"
+                })
+
+            # 5. yaml.load without SafeLoader
+            if module_name == "yaml" and func_name in ("load", "unsafe_load"):
+                is_safe = False
+                for kw in node.keywords:
+                    if kw.arg == "Loader":
+                        if isinstance(kw.value, ast.Attribute) and kw.value.attr in ("SafeLoader", "CSafeLoader"):
+                            is_safe = True
+                        elif isinstance(kw.value, ast.Name) and kw.value.id in ("SafeLoader", "CSafeLoader"):
+                            is_safe = True
+                if not is_safe or func_name == "unsafe_load":
+                    ast_findings.append({
+                        "id": "AST-SER-002",
+                        "category": "Deserialization/AST",
+                        "desc": "Arbitrary object instantiation risk: yaml.load() without SafeLoader",
+                        "severity": "HIGH",
+                        "line": getattr(node, "lineno", 1),
+                        "text": f"yaml.{func_name}(...)"
+                    })
+
+            # 6. execute with raw string interpolation
             if func_name == "execute" and node.args:
                 arg0 = node.args[0]
                 is_sqli = False
@@ -415,7 +454,7 @@ def get_git_diff_files(target_dir):
                 if " -> " in rel:
                     rel = rel.split(" -> ")[-1].strip().strip('"')
                 full = os.path.join(target_dir, rel)
-                if os.path.abspath(full) in TOOL_INTERNAL_FILES:
+                if os.path.normcase(os.path.abspath(full)) in TOOL_INTERNAL_FILES:
                     continue
                 if os.path.isfile(full):
                     files.append(full)
@@ -454,7 +493,7 @@ def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool =
             dirs[:] = [d for d in dirs if d not in active_excluded]
             for f in files:
                 full = os.path.join(root, f)
-                if os.path.abspath(full) in TOOL_INTERNAL_FILES:
+                if os.path.normcase(os.path.abspath(full)) in TOOL_INTERNAL_FILES:
                     continue
                 all_files.append(full)
 
@@ -474,7 +513,7 @@ def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool =
     for check in CHECKS:
         matched_instances = []
         for file_path, lines in file_lines.items():
-            if not file_matches_extensions(file_path, check["exts"]):
+            if not file_matches_extensions(file_path, check["exts"], category=check.get("category")):
                 continue
 
             for line_no, line in enumerate(lines, start=1):

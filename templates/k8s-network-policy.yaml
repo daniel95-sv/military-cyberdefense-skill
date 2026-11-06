@@ -83,3 +83,47 @@ spec:
         - protocol: TCP
           port: 6379
 
+---
+# 4. Ingress Policy for PostgreSQL Database (Backend access ONLY)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-microsegmentation
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend-api
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# 5. Ingress Policy for Redis Cache (Backend access ONLY)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-microsegmentation
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-cache
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend-api
+      ports:
+        - protocol: TCP
+          port: 6379
+

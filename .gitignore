@@ -8,6 +8,7 @@ __pycache__/
 baseline.json
 fim-manifest.json
 report.json
+reports/
 
 # Operating System Files
 .DS_Store

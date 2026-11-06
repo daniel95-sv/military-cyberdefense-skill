@@ -15,7 +15,7 @@
       "category": "Secrets",
       "desc": "Hardcoded AWS Access Key",
       "regex": "(?i)AKIA[0-9A-Z]{16}",
-      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"],
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"],
       "severity": "CRITICAL"
     },
     {
@@ -23,7 +23,7 @@
       "category": "Secrets",
       "desc": "Hardcoded Bearer / Secret Token",
       "regex": "(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\\s*[:=]\\s*['\"][a-zA-Z0-9_\\-]{20,}['\"]",
-      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"],
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"],
       "severity": "HIGH"
     },
     {

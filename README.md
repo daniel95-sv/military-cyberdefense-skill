@@ -116,7 +116,7 @@ military-cyberdefense-skill/
     ├── cloudflare-waf-rules.json            # Reglas WAF y Rate Limiting para Cloudflare (JSON)
     ├── cloudflare-waf.tf                    # Configuración declarativa en Terraform de Cloudflare WAF
     ├── docker-compose.hardened.yml          # Compose con read_only, cap_drop: ALL y loopback 127.0.0.1
-    ├── Dockerfile.hardened                  # Dockerfile militar rootless y multi-stage (100% Trivy)
+    ├── Dockerfile.hardened                  # Dockerfile rootless y multi-stage endurecido (CIS Benchmark / NIST SP 800-190)
     ├── github-defense-gate.yml              # Pipeline CI/CD: Código + Google OSV + Aqua Trivy + TruffleHog
     ├── k8s-network-policy.yaml              # Políticas K8s Default-Deny y microsegmentación de red
     ├── nginx.hardened.conf                  # Configuración Nginx completa de alta seguridad y anti-tokens

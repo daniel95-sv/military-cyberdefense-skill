@@ -44,7 +44,8 @@ if (-not (Test-Path $rulesPath)) {
 
 $raw = Get-Content -Path $rulesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $count = $raw.baseline_checks.Count
-Write-Host ("[+] SSOT verified: {0} baseline checks defined." -f $count) -ForegroundColor Green
-Write-Host " STATUS: DEFCON-5 (SYNCHRONIZED)." -ForegroundColor Green
-exit 0
+Write-Host ("[+] SSOT loaded: {0} baseline checks defined." -f $count) -ForegroundColor Cyan
+Write-Host "[-] [INCOMPLETE] Python runtime is not installed. Full cross-template semantic parity analysis (Terraform WAF, Gitleaks, security headers) requires Python." -ForegroundColor Yellow
+Write-Host " STATUS: INCOMPLETE (Tool dependency absent; full synchronization cannot be certified)." -ForegroundColor Yellow
+exit 2
 

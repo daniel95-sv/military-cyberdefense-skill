@@ -21,7 +21,7 @@ import subprocess
 def run_command(cmd: str) -> int:
     """Executes a test command safely without shell=True to prevent command injection."""
     try:
-        args = shlex.split(cmd, posix=(os.name != "nt"))
+        args = shlex.split(cmd)
         proc = subprocess.run(args, shell=False)
         return proc.returncode
     except Exception as e:

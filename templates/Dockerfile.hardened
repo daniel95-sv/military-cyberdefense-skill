@@ -1,9 +1,9 @@
-# DEFCON-1 Military-Grade Hardened Dockerfile Template
-# Passing 100% of Aqua Security Trivy, CIS Docker Benchmark, and NIST SP 800-190 controls.
+# DEFCON-1 Hardened Dockerfile Template
+# Built in accordance with CIS Docker Benchmark and NIST SP 800-190 principles.
 #
 # Immutable base image pinning via SHA-256 digest prevents mutable tag attacks.
 # Base: Node.js 22 Alpine (Digest-pinned)
-# Alternative true distroless runtime: gcr.io/distroless/nodejs22-debian12
+# Alternative true distroless runtime: gcr.io/distroless/nodejs22-debian12:nonroot
 
 # ==============================================================================
 # STAGE 1: Isolated Build Environment (Contains compilers and dev dependencies)

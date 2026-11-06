@@ -20,6 +20,7 @@ import json
 import hmac
 import hashlib
 import argparse
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -39,14 +40,29 @@ def scan_directory(target_dir: str, exclude_files: set = None, read_errors: list
     inventory = {}
     target_path = Path(target_dir).resolve()
     exclude_files = exclude_files or set()
+    normalized_excludes = {os.path.normcase(os.path.abspath(ef)) for ef in exclude_files}
     
-    for root, dirs, files in os.walk(target_path):
+    for root, dirs, files in os.walk(target_path, followlinks=False):
         dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
         for file in files:
             full_path = os.path.join(root, file)
             try:
+                # Symlink handling: do not follow symlinks pointing outside target directory
+                if os.path.islink(full_path):
+                    real_target = os.path.realpath(full_path)
+                    try:
+                        common = os.path.commonpath([str(target_path), real_target])
+                        if common != str(target_path):
+                            if read_errors is not None:
+                                read_errors.append((full_path, "Symlink target points outside target directory"))
+                            continue
+                    except ValueError:
+                        if read_errors is not None:
+                            read_errors.append((full_path, "Symlink target on different drive or unresolvable path"))
+                        continue
+
                 full_path_abs = os.path.abspath(full_path)
-                if full_path_abs in exclude_files:
+                if os.path.normcase(full_path_abs) in normalized_excludes:
                     continue
                 rel_path = os.path.relpath(full_path, target_path).replace("\\", "/")
                 if rel_path in exclude_files:
@@ -66,24 +82,53 @@ def compute_manifest_hmac(files_dict: dict, secret: str) -> str:
     canonical = json.dumps(files_dict, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return hmac.new(secret.encode('utf-8'), canonical, hashlib.sha384).hexdigest()
 
-def init_baseline(target_dir: str, output_file: str, secret: str = None):
-    secret = secret or os.environ.get("DEFCON_FIM_SECRET")
+def resolve_secret(cli_secret: str = None, secret_env: str = None, secret_file: str = None) -> str:
+    """Safely resolves HMAC secret from env var, secret file, or CLI (with warning)."""
+    if secret_env:
+        val = os.environ.get(secret_env)
+        if val:
+            return val.strip()
+    if secret_file and os.path.isfile(secret_file):
+        try:
+            with open(secret_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"[-] [WARN] Failed reading secret file {secret_file}: {e}", file=sys.stderr)
+    env_default = os.environ.get("DEFCON_FIM_SECRET")
+    if env_default:
+        return env_default.strip()
+    if cli_secret:
+        print("[!] [SECURITY WARNING] Passing HMAC secrets via CLI arguments exposes them in process listings (ps/proc). Use DEFCON_FIM_SECRET or --secret-file instead.", file=sys.stderr)
+        return cli_secret
+    return None
+
+def init_baseline(target_dir: str, output_file: str, secret: str = None, secret_env: str = None, secret_file: str = None):
+    secret = resolve_secret(secret, secret_env, secret_file)
     print("==========================================================")
     print(" [DEFCON-1] WAZUH-GRADE FILE INTEGRITY MONITOR (INIT)     ")
     print("==========================================================")
     print(f"Target Directory: {target_dir}")
     print(f"Output Baseline:  {output_file}\n")
+
+    if not os.path.isdir(target_dir):
+        print(f"[-] [FATAL] Target directory does not exist or is not a directory: {target_dir}")
+        return 2
     
     exclude = {os.path.abspath(output_file)}
     read_errors = []
     inventory = scan_directory(target_dir, exclude_files=exclude, read_errors=read_errors)
+
+    # CRITICAL CONTRACT: Cannot create a baseline if any target file could not be read
     if read_errors:
-        print(f"[-] [WARN] {len(read_errors)} files could not be read during baseline initialization:")
-        for rf, err in read_errors[:5]:
+        print(f"[-] [ERROR] Baseline initialization INCOMPLETE: {len(read_errors)} files could not be read:")
+        for rf, err in read_errors[:10]:
             print(f"    ! {rf}: {err}")
+        print("\n STATUS: INCOMPLETE (Read errors encountered. Refusing to write partial baseline).")
+        return 2
 
     metadata = {
         "generator": "DEFCON-1 FIM Engine (Wazuh Doctrine)",
+        "version": "2.0.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "target": os.path.abspath(target_dir),
         "file_count": len(inventory)
@@ -101,15 +146,60 @@ def init_baseline(target_dir: str, output_file: str, secret: str = None):
         "files": inventory
     }
     
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
+    # Atomic write to prevent partially-written/corrupted baseline on crash or interruption
+    out_dir = os.path.dirname(os.path.abspath(output_file)) or "."
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=out_dir, prefix="baseline_", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, output_file)
+    except Exception as e:
+        print(f"[-] [FATAL] Atomic baseline write failed: {e}")
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return 2
         
     print(f"[+] Baseline successfully created with {len(inventory)} hashed files.")
     print(f"[+] Cryptographic manifest stored at: {output_file}")
     return 0
 
-def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None, secret: str = None):
-    secret = secret or os.environ.get("DEFCON_FIM_SECRET")
+def validate_baseline_schema(baseline_data: dict) -> tuple:
+    """Validates baseline manifest schema integrity and checks for path traversal attempts."""
+    if not isinstance(baseline_data, dict):
+        return False, "Root manifest is not a JSON object"
+    metadata = baseline_data.get("metadata")
+    if not isinstance(metadata, dict):
+        return False, "Missing or invalid 'metadata' object"
+    files = baseline_data.get("files")
+    if not isinstance(files, dict):
+        return False, "Missing or invalid 'files' object"
+
+    for rel_path, entry in files.items():
+        # Prevent path traversal in manifest file paths
+        if not isinstance(rel_path, str) or not rel_path:
+            return False, f"Invalid path key: {rel_path}"
+        if rel_path.startswith("/") or rel_path.startswith("\\") or ":" in rel_path:
+            return False, f"Manifest path must be relative: {rel_path}"
+        parts = rel_path.replace("\\", "/").split("/")
+        if ".." in parts:
+            return False, f"Path traversal attempt in manifest: {rel_path}"
+        if not isinstance(entry, dict) or "sha256" not in entry or "size" not in entry:
+            return False, f"Invalid entry structure for: {rel_path}"
+        sha = entry.get("sha256")
+        if not isinstance(sha, str) or len(sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in sha):
+            return False, f"Invalid SHA-256 hash in manifest for: {rel_path}"
+        if not isinstance(entry.get("size"), int) or entry.get("size") < 0:
+            return False, f"Invalid file size in manifest for: {rel_path}"
+    return True, None
+
+def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None, secret: str = None, secret_env: str = None, secret_file: str = None):
+    secret = resolve_secret(secret, secret_env, secret_file)
     print("==========================================================")
     print(" [DEFCON-1] WAZUH-GRADE FILE INTEGRITY MONITOR (VERIFY)   ")
     print("==========================================================")
@@ -119,12 +209,22 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
     if not os.path.isfile(baseline_file):
         print(f"[-] [FATAL] Baseline file not found: {baseline_file}")
         return 2
+
+    if not os.path.isdir(target_dir):
+        print(f"[-] [FATAL] Target directory does not exist or is not a directory: {target_dir}")
+        return 2
         
     try:
         with open(baseline_file, "r", encoding="utf-8") as f:
             baseline_data = json.load(f)
     except Exception as e:
         print(f"[-] [FATAL] Corrupted baseline file: {e}")
+        return 2
+
+    # Schema validation
+    is_valid_schema, schema_err = validate_baseline_schema(baseline_data)
+    if not is_valid_schema:
+        print(f"[-] [FATAL] Baseline schema invalid: {schema_err}")
         return 2
         
     base_files = baseline_data.get("files", {})
@@ -150,10 +250,6 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
         exclude.add(os.path.abspath(sarif_file))
     read_errors = []
     current_inventory = scan_directory(target_dir, exclude_files=exclude, read_errors=read_errors)
-    if read_errors:
-        print(f"[-] [WARN] {len(read_errors)} files could not be read during integrity verification:")
-        for rf, err in read_errors[:5]:
-            print(f"    ! {rf}: {err}")
     
     tampered = []
     unauthorized = []
@@ -162,7 +258,10 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
     # Check baseline files against current
     for rel_path, data in base_files.items():
         if rel_path not in current_inventory:
-            deleted.append(rel_path)
+            # Check if this missing file was an unreadable error
+            err_for_file = next((err for rf, err in read_errors if os.path.relpath(rf, target_dir).replace("\\", "/") == rel_path), None)
+            if not err_for_file:
+                deleted.append(rel_path)
         elif current_inventory[rel_path]["sha256"] != data["sha256"]:
             tampered.append({
                 "path": rel_path,
@@ -176,6 +275,15 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
             unauthorized.append(rel_path)
             
     print("--- Integrity Verification Results ---")
+
+    # If any file could not be read, verification is INCOMPLETE (cannot certify compliant)
+    if read_errors:
+        print(f"[-] [ERROR] {len(read_errors)} files could not be read during integrity verification:")
+        for rf, err in read_errors[:10]:
+            print(f"    ! {rf}: {err}")
+        print("\n STATUS: INCOMPLETE (Unreadable files prevent reliable verification).")
+        return 2
+
     if not tampered and not unauthorized and not deleted:
         print(f"[PASS] All {len(current_inventory)} files match baseline. Zero integrity anomalies.")
         print("==========================================================")
@@ -256,23 +364,25 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
 def main():
     parser = argparse.ArgumentParser(
         description="DEFCON-1 File Integrity Monitor (Wazuh SIEM/XDR Doctrine)",
-        epilog="Example: python check-file-integrity.py /app --init baseline.json --secret MY_KEY"
+        epilog="Example: python check-file-integrity.py /app --init baseline.json --secret-env DEFCON_FIM_SECRET"
     )
     parser.add_argument("directory", help="Target directory to inspect")
     parser.add_argument("--init", dest="init_file", help="Initialize and export new baseline JSON")
     parser.add_argument("--verify", dest="verify_file", help="Verify target directory against existing baseline JSON")
     parser.add_argument("--sarif", dest="sarif_file", help="Export integrity findings in SARIF 2.1.0 format")
-    parser.add_argument("--secret", dest="secret", help="Optional secret key for HMAC-SHA384 manifest authentication")
+    parser.add_argument("--secret", dest="secret", help="Secret key for HMAC-SHA384 manifest authentication (warning: visible in ps)")
+    parser.add_argument("--secret-env", dest="secret_env", help="Environment variable name containing HMAC secret")
+    parser.add_argument("--secret-file", dest="secret_file", help="Path to protected file containing HMAC secret")
     
     args = parser.parse_args()
     
     if args.init_file:
-        sys.exit(init_baseline(args.directory, args.init_file, secret=args.secret))
+        sys.exit(init_baseline(args.directory, args.init_file, secret=args.secret, secret_env=args.secret_env, secret_file=args.secret_file))
     elif args.verify_file:
-        sys.exit(verify_baseline(args.directory, args.verify_file, sarif_file=args.sarif_file, secret=args.secret))
+        sys.exit(verify_baseline(args.directory, args.verify_file, sarif_file=args.sarif_file, secret=args.secret, secret_env=args.secret_env, secret_file=args.secret_file))
     else:
         parser.print_help()
-        sys.exit(1)
+        sys.exit(3)
 
 if __name__ == "__main__":
     main()

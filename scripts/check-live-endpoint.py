@@ -71,6 +71,9 @@ def is_blocked_ip(ip_str: str) -> bool:
     """Checks whether an IP address belongs to loopback, private, link-local, multicast, or cloud metadata ranges."""
     try:
         ip = ipaddress.ip_address(ip_str)
+        # Handle IPv4-mapped IPv6 (e.g., ::ffff:127.0.0.1)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            return is_blocked_ip(str(ip.ipv4_mapped))
         return (
             ip.is_loopback or
             ip.is_private or
@@ -85,14 +88,37 @@ def is_blocked_ip(ip_str: str) -> bool:
     except ValueError:
         return True
 
+def is_internal_host(hostname: str) -> bool:
+    """Determines whether a hostname or IP represents a private/internal target."""
+    h = hostname.lower()
+    if h in ("localhost", "127.0.0.1", "::1") or h.endswith(".local") or h.endswith(".internal"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return is_blocked_ip(str(ip))
+    except ValueError:
+        pass
+    try:
+        addr_info = socket.getaddrinfo(h, None)
+        for item in addr_info:
+            ip_addr = item[4][0]
+            if is_blocked_ip(ip_addr):
+                return True
+    except Exception:
+        pass
+    return False
+
 def validate_target_url(url: str, allow_internal: bool = False):
     """
-    Strictly validates destination URL scheme, hostname, and resolved IP addresses against SSRF attacks.
+    Strictly validates destination URL scheme, hostname, credentials, and resolved IP addresses against SSRF attacks.
     Blocks localhost, private subnets, link-local addresses, and cloud provider metadata services.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError(f"Insecure or invalid URI scheme '{parsed.scheme}'. Only http and https are allowed.")
+
+    if parsed.username or parsed.password:
+        raise PermissionError("SSRF Protection: URLs containing embedded credentials (userinfo) are forbidden.")
 
     hostname = parsed.hostname
     if not hostname:
@@ -111,27 +137,31 @@ def validate_target_url(url: str, allow_internal: bool = False):
     if hostname_lower in blocked_hosts:
         raise PermissionError(f"Target '{hostname}' is a cloud metadata endpoint and is blocked.")
 
-    if not allow_internal:
-        if hostname_lower in ("localhost", "127.0.0.1", "::1") or hostname_lower.endswith(".local") or hostname_lower.endswith(".internal"):
-            raise PermissionError(f"SSRF Protection: Access to local/internal host '{hostname}' is forbidden. Use --allow-internal to override.")
+    # DNS resolution to verify target IP address
+    try:
+        addr_info = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as ge:
+        # A DNS resolution failure cannot be assumed safe; raise to prevent blind execution
+        if not allow_internal:
+            raise ConnectionError(f"DNS resolution failed for host '{hostname}': {ge}")
+        addr_info = []
 
-        # DNS resolution to verify target IP address
-        try:
-            addr_info = socket.getaddrinfo(hostname, None)
-            for item in addr_info:
-                ip_addr = item[4][0]
-                if is_blocked_ip(ip_addr):
-                    raise PermissionError(f"SSRF Protection: Host '{hostname}' resolves to private/internal IP {ip_addr}. Connection blocked.")
-        except socket.gaierror:
-            pass
+    for item in addr_info:
+        ip_addr = item[4][0]
+        if is_blocked_ip(ip_addr) and not allow_internal:
+            raise PermissionError(f"SSRF Protection: Host '{hostname}' resolves to private/internal IP {ip_addr}. Connection blocked.")
+
+    if not allow_internal and is_internal_host(hostname_lower):
+        raise PermissionError(f"SSRF Protection: Access to local/internal host '{hostname}' is forbidden. Use --allow-internal to override.")
 
 class SSRFSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Intercepts and validates every HTTP redirect to prevent SSRF pivot attacks to internal services."""
+    """Intercepts and re-validates every HTTP redirect to prevent SSRF pivot attacks from public to private services."""
     def __init__(self, allow_internal: bool = False):
         super().__init__()
         self.allow_internal = allow_internal
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Redirect destinations must never jump to private subnets without explicit permission
         validate_target_url(newurl, allow_internal=self.allow_internal)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -239,7 +269,14 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None, al
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
     # Authorization verification for external perimeter reconnaissance
-    is_internal = hostname.lower() in ("localhost", "127.0.0.1", "::1") or allow_internal
+    # Explicit separation of controls:
+    # 1. Internal targets require --allow-internal to proceed
+    # 2. External targets ALWAYS require --authorized (--allow-internal never bypasses external authorization)
+    is_internal = is_internal_host(hostname)
+    if is_internal and not allow_internal:
+        print(f"[-] [SSRF REJECTED] Access to internal host '{hostname}' forbidden without --allow-internal.")
+        return 1
+
     if not is_internal and not authorized:
         if sys.stdin.isatty():
             try:
@@ -314,7 +351,7 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None, al
         print(f"\n[!] [STATUS] HTTP Error Response: {e.code} (Auditing response headers anyway)")
     except Exception as e:
         print(f"[-] [FATAL] Connection failed: {e}")
-        return 1
+        return 2
 
     print("\n--- 2. Evaluating Military-Grade HTTP Security Headers ---")
     for hdr_name, desc in REQUIRED_HEADERS:
@@ -561,7 +598,7 @@ def main():
 
     if not target_url:
         parser.print_help()
-        sys.exit(1)
+        sys.exit(3)
 
     sys.exit(audit_live_endpoint(target_url, timeout=args.timeout, json_output=args.json_output, allow_internal=args.allow_internal, authorized=args.authorized))
 
