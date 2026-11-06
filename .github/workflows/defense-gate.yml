@@ -122,7 +122,7 @@ jobs:
           persist-credentials: false
 
       - name: TruffleHog OSS (Active Key Verification - Pinned Version)
-        uses: trufflesecurity/trufflehog@v3.88.15
+        uses: trufflesecurity/trufflehog@v3.99.8
         with:
           path: ./
           extra_args: --only-verified
