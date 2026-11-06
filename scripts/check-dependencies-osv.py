@@ -187,6 +187,40 @@ def query_osv_batch(packages):
 
     return all_vulns
 
+def export_sarif(sarif_path, target_dir, vulns):
+    sarif_results = []
+    for v in vulns:
+        raw_fp = v.get("file_path", "lockfile")
+        rel_fp = os.path.relpath(raw_fp, target_dir).replace("\\", "/") if os.path.exists(raw_fp) else raw_fp
+        sarif_results.append({
+            "ruleId": v["id"],
+            "level": "error",
+            "message": {"text": f"Vulnerable dependency {v['package']}@{v['version']}: {v['summary']}"},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": rel_fp},
+                    "region": {"startLine": 1}
+                }
+            }]
+        })
+    sarif_doc = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "DEFCON-1 Supply Chain Auditor (Google OSV)",
+                    "version": "1.0.0",
+                    "informationUri": "https://osv.dev"
+                }
+            },
+            "results": sarif_results
+        }]
+    }
+    with open(sarif_path, "w", encoding="utf-8") as sf:
+        json.dump(sarif_doc, sf, indent=2)
+    print(f"\n[SARIF] Exported supply chain SARIF to: {sarif_path}")
+
 def main():
     parser = argparse.ArgumentParser(description="DEFCON-1 Supply Chain Auditor (Google OSV)")
     parser.add_argument("target", nargs="?", default=".", help="Target directory to scan for lockfiles")
@@ -229,6 +263,8 @@ def main():
         print("[*] No supported lockfiles or dependencies found to audit.")
         print("==========================================================")
         print(" STATUS: DEFCON-5 (No third-party packages to inspect).")
+        if args.sarif:
+            export_sarif(args.sarif, args.target, [])
         return 0
 
     print("[*] Querying Google OSV.dev vulnerability database in real-time...")
@@ -248,42 +284,13 @@ def main():
             print(f"   Reference  : https://osv.dev/vulnerability/{v['id']}")
 
         if args.sarif:
-            sarif_results = []
-            for v in vulns:
-                raw_fp = v.get("file_path", "lockfile")
-                rel_fp = os.path.relpath(raw_fp, args.target).replace("\\", "/") if os.path.exists(raw_fp) else raw_fp
-                sarif_results.append({
-                    "ruleId": v["id"],
-                    "level": "error",
-                    "message": {"text": f"Vulnerable dependency {v['package']}@{v['version']}: {v['summary']}"},
-                    "locations": [{
-                        "physicalLocation": {
-                            "artifactLocation": {"uri": rel_fp},
-                            "region": {"startLine": 1}
-                        }
-                    }]
-                })
-            sarif_doc = {
-                "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-                "version": "2.1.0",
-                "runs": [{
-                    "tool": {
-                        "driver": {
-                            "name": "DEFCON-1 Supply Chain Auditor (Google OSV)",
-                            "version": "1.0.0",
-                            "informationUri": "https://osv.dev"
-                        }
-                    },
-                    "results": sarif_results
-                }]
-            }
-            with open(args.sarif, "w", encoding="utf-8") as sf:
-                json.dump(sarif_doc, sf, indent=2)
-            print(f"\n[SARIF] Exported supply chain SARIF to: {args.sarif}")
+            export_sarif(args.sarif, args.target, vulns)
 
         print("\n STATUS: REMEDIATION REQUIRED. Upgrade vulnerable packages.")
         return 1
     else:
+        if args.sarif:
+            export_sarif(args.sarif, args.target, [])
         print("\n STATUS: DEFCON-5 (COMPLIANT). 0 known CVEs across all dependencies.")
         return 0
 
