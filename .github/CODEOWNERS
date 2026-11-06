@@ -1,0 +1,22 @@
+# DEFCON-1 Military Cyberdefense Code Owners
+# Requires mandatory review and sign-off by @daniel95-sv before merging any pull request.
+
+# Default rule: daniel95-sv owns all files in this repository
+* @daniel95-sv
+
+# Critical CI/CD automation & governance
+/.github/ @daniel95-sv
+/.github/workflows/ @daniel95-sv
+/.github/CODEOWNERS @daniel95-sv
+/.github/dependabot.yml @daniel95-sv
+
+# Single Source of Truth (SSOT) & Rules
+/rules/ @daniel95-sv
+.gitleaks.toml @daniel95-sv
+
+# Core defense scripts, scanners & tests
+/scripts/ @daniel95-sv
+/tests/ @daniel95-sv
+
+# Hardened production templates
+/templates/ @daniel95-sv

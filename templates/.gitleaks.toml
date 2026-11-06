@@ -5,9 +5,14 @@
 useDefault = true
 
 [allowlist]
-description = "Global Allowlist for Safe Non-Secret Paths and Hashes"
+description = "Global Allowlist for Safe Non-Secret Paths, Rules, and Hashes"
 paths = [
   '''^\.gitleaks\.toml$''',
+  '''^templates/\.gitleaks\.toml$''',
+  '''^rules/security-rules\.json$''',
+  '''^scripts/check-security-baseline\.py$''',
+  '''^scripts/check-security-baseline\.ps1$''',
+  '''^tests/.*$''',
   '''package-lock\.json$''',
   '''pnpm-lock\.yaml$''',
   '''Cargo\.lock$''',

@@ -16,6 +16,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  unit-and-regression-tests:
+    name: Automated Unit & Regression Tests (DEFCON-1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: '3.12'
+
+      - name: Run Python Test Suite (Unittest)
+        run: |
+          python -m unittest discover tests/ -v
+
   codebase-audit:
     name: Military-Grade Baseline & Diff Audit
     runs-on: ubuntu-latest
@@ -25,13 +46,13 @@ jobs:
       security-events: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: '3.12'
 
@@ -44,7 +65,7 @@ jobs:
           python ./scripts/check-security-baseline.py . --sarif security-report.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
         if: always()
         with:
           sarif_file: security-report.sarif
@@ -59,12 +80,12 @@ jobs:
       security-events: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: '3.12'
 
@@ -73,7 +94,7 @@ jobs:
           python ./scripts/check-dependencies-osv.py . --sarif osv-results.sarif
 
       - name: Upload OSV SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
         if: always()
         with:
           sarif_file: osv-results.sarif
@@ -88,7 +109,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
@@ -102,7 +123,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -116,7 +137,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -136,7 +157,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
@@ -145,7 +166,7 @@ jobs:
           python3 ./scripts/check-security-baseline.py . --sarif skills-audit.sarif
 
       - name: Upload Agent Skills SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
         if: always()
         with:
           sarif_file: skills-audit.sarif
