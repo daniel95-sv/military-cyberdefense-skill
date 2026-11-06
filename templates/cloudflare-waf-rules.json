@@ -9,13 +9,13 @@
     },
     {
       "name": "Block Obvious Honeypot & Reconnaissance Paths",
-      "expression": "(http.request.uri.path contains \"/phpmyadmin\") or (http.request.uri.path contains \"/.env\") or (http.request.uri.path contains \"/.git\") or (http.request.uri.path contains \"/wp-login.php\")",
+      "expression": "(http.request.uri.path contains \"/phpmyadmin\") or (http.request.uri.path contains \"/.env\") or (http.request.uri.path contains \"/.git\") or (http.request.uri.path contains \"/wp-login.php\") or (http.request.uri.path contains \"/xmlrpc.php\") or (http.request.uri.path contains \"/.aws\")",
       "action": "block",
       "description": "Instantly drops connections scanning for common admin panels, git metadata, and environment files."
     },
     {
       "name": "Rate Limit Authentication Endpoints",
-      "expression": "(http.request.uri.path in {\"/api/auth/login\" \"/api/auth/token\" \"/api/auth/reset-password\"})",
+      "expression": "(http.request.uri.path in {\"/api/auth/login\" \"/api/auth/token\" \"/api/auth/reset-password\" \"/api/v1/auth/login\"})",
       "action": "rate_limit",
       "rate_limit_params": {
         "threshold": 5,

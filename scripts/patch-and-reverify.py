@@ -14,27 +14,55 @@ Uses only the Python standard library.
 import os
 import sys
 import shutil
+import shlex
 import argparse
 import subprocess
 
 def run_command(cmd: str) -> int:
-    """Executes a test command and streams output safely."""
+    """Executes a test command safely without shell=True to prevent command injection."""
     try:
-        proc = subprocess.run(cmd, shell=True)
+        args = shlex.split(cmd, posix=(os.name != "nt"))
+        proc = subprocess.run(args, shell=False)
         return proc.returncode
     except Exception as e:
         print(f"[-] Execution failed: {e}")
         return 1
 
-def patch_and_reverify(target_file: str, test_cmd: str = None, scanner_script: str = None, non_interactive: bool = False):
+def patch_and_reverify(
+    target_file: str,
+    test_cmd: str = None,
+    scanner_script: str = None,
+    non_interactive: bool = False,
+    allow_dirty: bool = False,
+    dry_run: bool = False,
+    authorized: bool = False
+):
     print("==========================================================")
     print(" [DEFCON-1] SURGICAL PATCH & RE-VERIFICATION HARNESS      ")
     print("==========================================================")
     print(f"Target File : {target_file}")
+    if dry_run:
+        print("Mode        : DRY RUN (Simulation only)")
 
     if not os.path.isfile(target_file):
         print(f"[-] [FATAL] Target file does not exist: {target_file}")
         return 1
+
+    # Authorization Check for Destructive / Modifying Operations
+    if not dry_run:
+        if non_interactive and not authorized:
+            print("[-] [ABORT] Modifying source code in non-interactive mode requires explicit authorization.")
+            print("    Pass --confirm (or --authorized) to authorize surgical patch application.")
+            return 1
+        elif not non_interactive and not authorized:
+            try:
+                confirm = input(f"[AUTHORIZATION] Do you authorize applying a surgical patch to '{target_file}'? [y/N]: ").strip().lower()
+                if confirm not in ("y", "yes"):
+                    print("[-] [CANCELLED] Patch application aborted by operator.")
+                    return 1
+            except (EOFError, KeyboardInterrupt):
+                print("\n[-] [CANCELLED] Operation cancelled.")
+                return 1
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if not scanner_script:
@@ -53,9 +81,23 @@ def patch_and_reverify(target_file: str, test_cmd: str = None, scanner_script: s
         print(f"\n[2/4] Running functional test baseline: '{test_cmd}'...")
         res = run_command(test_cmd)
         if res != 0:
-            print(" [!] [WARN] Baseline tests failed before patch was applied!")
+            print(" [-] [ABORT] Functional baseline tests failed BEFORE applying the patch!")
+            print("     Cannot establish a working baseline. Fix failing tests first or specify --allow-dirty.")
+            if not allow_dirty:
+                if os.path.exists(backup_file):
+                    os.remove(backup_file)
+                return 1
+            print(" [!] [WARN] Proceeding despite failing baseline due to --allow-dirty flag.")
         else:
             print(" [+] Baseline tests passed cleanly.")
+
+    if dry_run:
+        print("\n[DRY RUN] Simulating patch verification with baseline scanner...")
+        scan_proc = subprocess.run([sys.executable, scanner_script, target_file])
+        if os.path.exists(backup_file):
+            os.remove(backup_file)
+        print("\n[DRY RUN] Simulation finished. No modifications retained.")
+        return scan_proc.returncode
 
     # 3. Pause for patch application
     if not non_interactive:
@@ -71,7 +113,10 @@ def patch_and_reverify(target_file: str, test_cmd: str = None, scanner_script: s
         print("\n[-] [REJECTED] Security violation still present in patched file!")
         print("    Initiating immediate rollback...")
         shutil.move(backup_file, target_file)
-        print("    [ROLLBACK COMPLETE] Original state restored.")
+        if os.path.isfile(target_file):
+            print("    [ROLLBACK COMPLETE] Original state verified and restored.")
+        else:
+            print("    [-] [CRITICAL] Failed verifying restored target file!")
         return 1
     print(" [+] Security defect verified ELIMINATED.")
 
@@ -83,7 +128,10 @@ def patch_and_reverify(target_file: str, test_cmd: str = None, scanner_script: s
             print("\n[-] [REJECTED] Functional regression detected! Test suite failed after patch.")
             print("    Initiating immediate rollback...")
             shutil.move(backup_file, target_file)
-            print("    [ROLLBACK COMPLETE] Original state restored.")
+            if os.path.isfile(target_file):
+                print("    [ROLLBACK COMPLETE] Original state verified and restored.")
+            else:
+                print("    [-] [CRITICAL] Failed verifying restored target file!")
             return 1
         print(" [+] Non-regression verified: All functional tests passed.")
 
@@ -92,7 +140,10 @@ def patch_and_reverify(target_file: str, test_cmd: str = None, scanner_script: s
         os.remove(backup_file)
 
     print("\n==========================================================")
-    print(" [CERTIFIED] PATCH VALIDATED: Zero Defect + Zero Regression")
+    if test_cmd:
+        print(" [CERTIFIED] PATCH VALIDATED: Zero Defect + Zero Regression")
+    else:
+        print(" [CERTIFIED] PATCH VALIDATED: Zero Security Defect (Functional regression unverified: no test suite provided)")
     print("==========================================================")
     return 0
 
@@ -102,16 +153,22 @@ def main():
         epilog="Example: python patch-and-reverify.py src/auth.py --test 'pytest' --non-interactive"
     )
     parser.add_argument("target", help="Specific source file being patched")
-    parser.add_argument("--test", dest="test_cmd", help="Optional test suite command (e.g., 'npm test', 'pytest')")
+    parser.add_argument("--test", dest="test_cmd", help="Optional test suite command (e.g., 'pytest', 'npm test')")
     parser.add_argument("--scanner", dest="scanner_script", help="Path to baseline scanner (default: check-security-baseline.py)")
     parser.add_argument("--non-interactive", action="store_true", help="Run without pausing for manual input (CI/CD mode)")
+    parser.add_argument("--allow-dirty", action="store_true", help="Proceed even if pre-patch tests fail")
+    parser.add_argument("--dry-run", action="store_true", help="Simulate patch verification without permanent changes")
+    parser.add_argument("--confirm", "--authorized", dest="authorized", action="store_true", help="Explicitly authorize source code modification")
 
     args = parser.parse_args()
     sys.exit(patch_and_reverify(
         target_file=args.target,
         test_cmd=args.test_cmd,
         scanner_script=args.scanner_script,
-        non_interactive=args.non_interactive
+        non_interactive=args.non_interactive,
+        allow_dirty=args.allow_dirty,
+        dry_run=args.dry_run,
+        authorized=args.authorized
     ))
 
 if __name__ == "__main__":

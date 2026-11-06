@@ -7,10 +7,12 @@ server fingerprint leaks, RFC 9116 security.txt, and DNS anti-spoofing (DMARC & 
 Uses only the Python standard library (zero external dependencies).
 """
 
+import re
 import sys
 import ssl
 import socket
 import json
+import ipaddress
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -65,6 +67,130 @@ def load_endpoint_rules():
 
 REQUIRED_HEADERS, FINGERPRINT_HEADERS, SENSITIVE_PROBES = load_endpoint_rules()
 
+def is_blocked_ip(ip_str: str) -> bool:
+    """Checks whether an IP address belongs to loopback, private, link-local, multicast, or cloud metadata ranges."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return (
+            ip.is_loopback or
+            ip.is_private or
+            ip.is_link_local or
+            ip.is_multicast or
+            ip.is_reserved or
+            ip.is_unspecified or
+            ip_str.startswith("169.254.") or
+            ip_str.startswith("127.") or
+            ip_str == "0.0.0.0"
+        )
+    except ValueError:
+        return True
+
+def validate_target_url(url: str, allow_internal: bool = False):
+    """
+    Strictly validates destination URL scheme, hostname, and resolved IP addresses against SSRF attacks.
+    Blocks localhost, private subnets, link-local addresses, and cloud provider metadata services.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Insecure or invalid URI scheme '{parsed.scheme}'. Only http and https are allowed.")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: missing hostname.")
+
+    hostname_lower = hostname.lower()
+
+    # Block well-known cloud metadata endpoints
+    blocked_hosts = {
+        "metadata.google.internal",
+        "instance-data",
+        "169.254.169.254",
+        "metadata.packet.net",
+        "100.100.100.200"
+    }
+    if hostname_lower in blocked_hosts:
+        raise PermissionError(f"Target '{hostname}' is a cloud metadata endpoint and is blocked.")
+
+    if not allow_internal:
+        if hostname_lower in ("localhost", "127.0.0.1", "::1") or hostname_lower.endswith(".local") or hostname_lower.endswith(".internal"):
+            raise PermissionError(f"SSRF Protection: Access to local/internal host '{hostname}' is forbidden. Use --allow-internal to override.")
+
+        # DNS resolution to verify target IP address
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            for item in addr_info:
+                ip_addr = item[4][0]
+                if is_blocked_ip(ip_addr):
+                    raise PermissionError(f"SSRF Protection: Host '{hostname}' resolves to private/internal IP {ip_addr}. Connection blocked.")
+        except socket.gaierror:
+            pass
+
+class SSRFSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Intercepts and validates every HTTP redirect to prevent SSRF pivot attacks to internal services."""
+    def __init__(self, allow_internal: bool = False):
+        super().__init__()
+        self.allow_internal = allow_internal
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_target_url(newurl, allow_internal=self.allow_internal)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def build_safe_opener(allow_internal: bool = False):
+    redirect_handler = SSRFSafeRedirectHandler(allow_internal=allow_internal)
+    ctx = ssl.create_default_context()
+    https_handler = urllib.request.HTTPSHandler(context=ctx)
+    return urllib.request.build_opener(redirect_handler, https_handler)
+
+def validate_security_header_value(hdr_name: str, val: str):
+    """
+    Evaluates not just header existence, but the actual security strength of its value.
+    Returns: (is_strong, warning_message)
+    """
+    h_lower = hdr_name.lower()
+    val_clean = val.strip()
+
+    if h_lower == "x-content-type-options":
+        if val_clean.lower() != "nosniff":
+            return False, f"Value '{val_clean}' is weak. Must be 'nosniff'."
+        return True, None
+
+    if h_lower == "x-frame-options":
+        if val_clean.upper() not in ("DENY", "SAMEORIGIN"):
+            return False, f"Value '{val_clean}' is insecure. Must be 'DENY' or 'SAMEORIGIN'."
+        return True, None
+
+    if h_lower == "strict-transport-security":
+        if "max-age=" not in val_clean:
+            return False, "Missing 'max-age' directive."
+        m = re.search(r"max-age=(\d+)", val_clean)
+        if m:
+            age = int(m.group(1))
+            if age == 0:
+                return False, "HSTS max-age is 0 (disables HSTS protection)."
+            elif age < 15552000:
+                return True, f"HSTS max-age ({age}s) is shorter than recommended (minimum 15552000s / 6 months)."
+        return True, None
+
+    if h_lower == "content-security-policy":
+        issues = []
+        if "'unsafe-inline'" in val_clean and "'nonce-" not in val_clean and "'sha256-" not in val_clean:
+            issues.append("allows 'unsafe-inline' without nonce/hash")
+        if "'unsafe-eval'" in val_clean:
+            issues.append("allows 'unsafe-eval' (script injection vector)")
+        if "script-src *" in val_clean or "default-src *" in val_clean:
+            issues.append("contains wildcard '*' script/default source")
+        if issues:
+            return False, f"Permissive CSP: {', '.join(issues)}."
+        return True, None
+
+    if h_lower == "referrer-policy":
+        weak_policies = {"unsafe-url", "no-referrer-when-downgrade"}
+        if val_clean.lower() in weak_policies:
+            return False, f"Policy '{val_clean}' leaks referrers on cross-origin requests."
+        return True, None
+
+    return True, None
+
 def check_tls_certificate(hostname: str, port: int = 443, timeout: int = 5):
     """Inspects live TLS certificate validity, expiration, issuer, and protocol version."""
     cert_info = {}
@@ -93,13 +219,43 @@ def check_tls_certificate(hostname: str, port: int = 443, timeout: int = 5):
         cert_info["error"] = str(e)
     return cert_info
 
-def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
+def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None, allow_internal: bool = False, authorized: bool = False):
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
+
+    # Anti-SSRF Validation
+    try:
+        validate_target_url(url, allow_internal=allow_internal)
+    except Exception as e:
+        print("==========================================================")
+        print(" [DEFCON-1] LIVE ENDPOINT & PERIMETER AUDITOR             ")
+        print("==========================================================")
+        print(f"Target URL: {url}\n")
+        print(f"[-] [SSRF REJECTED] {e}")
+        return 1
 
     parsed = urllib.parse.urlparse(url)
     hostname = parsed.hostname or url
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    # Authorization verification for external perimeter reconnaissance
+    is_internal = hostname.lower() in ("localhost", "127.0.0.1", "::1") or allow_internal
+    if not is_internal and not authorized:
+        if sys.stdin.isatty():
+            try:
+                ans = input(f"[AUTHORIZATION REQUIRED] Target '{hostname}' is an external domain.\nDo you have explicit written authorization to perform active reconnaissance against this host? [y/N]: ").strip().lower()
+                if ans not in ("y", "yes"):
+                    print("[-] [CANCELLED] External reconnaissance aborted without authorization.")
+                    return 2
+            except (EOFError, KeyboardInterrupt):
+                print("\n[-] [CANCELLED] Operation cancelled.")
+                return 2
+        else:
+            print("[-] [ABORT] Active perimeter reconnaissance against external target requires explicit authorization.")
+            print(f"    Pass --authorized to certify permission to audit '{hostname}'.")
+            return 2
+
+    opener = build_safe_opener(allow_internal=allow_internal)
 
     print("==========================================================")
     print(" [DEFCON-1] LIVE ENDPOINT & PERIMETER AUDITOR             ")
@@ -150,8 +306,7 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
             url,
             headers={"User-Agent": "DEFCON-1-Live-Auditor/2.0 (+https://github.com/google-antigravity)"}
         )
-        ctx = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             headers = {k.lower(): v for k, v in resp.headers.items()}
             print(f"\n[+] [STATUS] HTTP Response: {resp.status} {resp.reason}")
     except urllib.error.HTTPError as e:
@@ -165,7 +320,15 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
     for hdr_name, desc in REQUIRED_HEADERS:
         val = headers.get(hdr_name.lower())
         if val:
-            print(f" [PASS] {hdr_name}: {val[:60]}...")
+            is_strong, warn_msg = validate_security_header_value(hdr_name, val)
+            if is_strong and not warn_msg:
+                print(f" [PASS] {hdr_name}: {val[:60]}...")
+            elif is_strong and warn_msg:
+                print(f" [PASS/WARN] {hdr_name}: {val[:60]}... ({warn_msg})")
+            else:
+                print(f" [FAIL] {hdr_name}: Insecure or weak value! {warn_msg}")
+                score -= 6
+                findings.append(f"Weak header value: {hdr_name} ({warn_msg})")
         else:
             print(f" [FAIL] {hdr_name} MISSING ({desc})")
             score -= 8
@@ -192,13 +355,35 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
             sec_url,
             headers={"User-Agent": "DEFCON-1-Live-Auditor/2.0"}
         )
-        with urllib.request.urlopen(sec_req, timeout=min(5, timeout)) as sec_resp:
+        with opener.open(sec_req, timeout=min(5, timeout)) as sec_resp:
             content = sec_resp.read().decode("utf-8", errors="ignore")
-            if "Contact:" in content:
-                print(f" [PASS] RFC 9116 security.txt discovered and validated at: {sec_url}")
+            has_contact = "Contact:" in content
+            has_expires = "Expires:" in content
+            if has_contact and has_expires:
+                m_exp = re.search(r"Expires:\s*([^\r\n]+)", content)
+                expired = False
+                exp_date_str = m_exp.group(1).strip() if m_exp else ""
+                try:
+                    exp_clean = exp_date_str.replace("Z", "+00:00")
+                    exp_dt = datetime.fromisoformat(exp_clean)
+                    if exp_dt < datetime.now(timezone.utc):
+                        expired = True
+                except Exception:
+                    pass
+                if expired:
+                    print(f" [-] [WARN] RFC 9116 security.txt is EXPIRED (Expires: {exp_date_str})!")
+                    score -= 5
+                    findings.append("Expired RFC 9116 security.txt")
+                else:
+                    print(f" [PASS] RFC 9116 security.txt validated (Contact & Valid Expires: {exp_date_str})")
+            elif has_contact:
+                print(" [WARN] security.txt exists but lacks mandatory 'Expires:' field (RFC 9116 requirement).")
+                score -= 3
+                findings.append("security.txt missing mandatory 'Expires:' field")
             else:
                 print(" [WARN] security.txt exists but lacks mandatory 'Contact:' field.")
-                score -= 3
+                score -= 4
+                findings.append("security.txt missing mandatory 'Contact:' field")
     except Exception:
         print(" [INFO] No /.well-known/security.txt found at target.")
         score -= 2
@@ -213,7 +398,7 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
                 probe_url,
                 headers={"User-Agent": "DEFCON-1-Live-Auditor/2.0"}
             )
-            with urllib.request.urlopen(p_req, timeout=min(5, timeout)) as p_resp:
+            with opener.open(p_req, timeout=min(5, timeout)) as p_resp:
                 if p_resp.status == 200:
                     body = p_resp.read().decode("utf-8", errors="ignore")
                     if signature in body:
@@ -235,7 +420,7 @@ def audit_live_endpoint(url: str, timeout: int = 10, json_output: str = None):
     ]
     try:
         req_page = urllib.request.Request(url, headers={"User-Agent": "DEFCON-1-Live-Auditor/2.0"})
-        with urllib.request.urlopen(req_page, timeout=min(5, timeout)) as page_resp:
+        with opener.open(req_page, timeout=min(5, timeout)) as page_resp:
             page_body = page_resp.read().decode("utf-8", errors="ignore")
             takeover_detected = False
             for sig, provider in takeover_signatures:
@@ -368,6 +553,8 @@ def main():
     parser.add_argument("--url", dest="url_opt", help="Target URL or domain (alternative to positional argument)")
     parser.add_argument("--timeout", type=int, default=10, help="HTTP request timeout in seconds (default: 10)")
     parser.add_argument("--json", dest="json_output", help="Optional path to export JSON audit report")
+    parser.add_argument("--allow-internal", action="store_true", help="Allow connections to private/internal IP addresses (bypasses SSRF protection for local testing)")
+    parser.add_argument("--authorized", action="store_true", help="Certify explicit authorization to audit external domain/target")
 
     args = parser.parse_args()
     target_url = args.url or args.url_opt
@@ -376,7 +563,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    sys.exit(audit_live_endpoint(target_url, timeout=args.timeout, json_output=args.json_output))
+    sys.exit(audit_live_endpoint(target_url, timeout=args.timeout, json_output=args.json_output, allow_internal=args.allow_internal, authorized=args.authorized))
 
 if __name__ == "__main__":
     main()

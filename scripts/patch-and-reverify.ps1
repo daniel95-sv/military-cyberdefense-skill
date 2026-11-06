@@ -18,7 +18,10 @@ param (
 
     [string]$TestCommand = "",
     [string]$ScannerScript = "",
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$AllowDirty,
+    [switch]$DryRun,
+    [switch]$ConfirmPatch
 )
 
 if (-not $ScannerScript) {
@@ -31,6 +34,9 @@ Write-Host "==========================================================" -Foregro
 Write-Host " [DEFCON-1] SURGICAL PATCH & RE-VERIFICATION HARNESS      " -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host ("Target File : {0}" -f $TargetFile) -ForegroundColor Gray
+if ($DryRun) {
+    Write-Host "Mode        : DRY RUN (Simulation only)" -ForegroundColor Magenta
+}
 
 if (-not (Test-Path $TargetFile)) {
     Write-Host ("ERROR: Target file does not exist: {0}" -f $TargetFile) -ForegroundColor Red
@@ -52,6 +58,21 @@ function Invoke-ShellCommand {
     }
 }
 
+# Authorization Check
+if (-not $DryRun) {
+    if ($NonInteractive -and (-not $ConfirmPatch)) {
+        Write-Host "[-] [ABORT] Modifying source code in non-interactive mode requires explicit authorization." -ForegroundColor Red
+        Write-Host "    Pass -ConfirmPatch to authorize surgical patch application." -ForegroundColor Red
+        exit 1
+    } elseif ((-not $NonInteractive) -and (-not $ConfirmPatch)) {
+        $ans = Read-Host "[AUTHORIZATION] Do you authorize applying a surgical patch to '$TargetFile'? [y/N]"
+        if ($ans -notmatch "^(y|yes)$") {
+            Write-Host "[-] [CANCELLED] Patch application aborted by operator." -ForegroundColor Yellow
+            exit 1
+        }
+    }
+}
+
 # 1. Capture Git Baseline / Backup
 $backupFile = "$TargetFile.defcon.bak"
 Copy-Item -Path $TargetFile -Destination $backupFile -Force
@@ -60,13 +81,27 @@ Write-Host "[1/4] Baseline state cached." -ForegroundColor Green
 # 2. Functional Baseline Verification (Pre-patch check)
 if ($TestCommand) {
     Write-Host "[2/4] Running functional test baseline..." -ForegroundColor Gray
-    # Safe invocation: use system shell to execute developer-supplied test suite
     Invoke-ShellCommand $TestCommand
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "WARNING: Baseline tests failed before patch was applied!" -ForegroundColor Yellow
+        Write-Host "[-] [ABORT] Functional baseline tests failed BEFORE applying patch!" -ForegroundColor Red
+        Write-Host "    Cannot establish a working baseline. Fix failing tests or use -AllowDirty." -ForegroundColor Red
+        if (-not $AllowDirty) {
+            if (Test-Path $backupFile) { Remove-Item -Path $backupFile -Force }
+            exit 1
+        }
+        Write-Host "WARNING: Proceeding despite failing baseline due to -AllowDirty switch." -ForegroundColor Yellow
     } else {
         Write-Host "   -> Baseline tests passed cleanly." -ForegroundColor Green
     }
+}
+
+if ($DryRun) {
+    Write-Host "`n[DRY RUN] Simulating patch verification with baseline scanner..." -ForegroundColor Magenta
+    & $psExe -ExecutionPolicy Bypass -File $ScannerScript -TargetPath $TargetFile
+    $dryExit = $LASTEXITCODE
+    if (Test-Path $backupFile) { Remove-Item -Path $backupFile -Force }
+    Write-Host "`n[DRY RUN] Simulation complete. No modifications retained." -ForegroundColor Magenta
+    exit $dryExit
 }
 
 if (-not $NonInteractive) {
@@ -85,7 +120,11 @@ if ($secExit -ne 0) {
     Write-Host "`n[REJECTED] Security violation still present in patched file!" -ForegroundColor Red
     Write-Host "Initiating immediate rollback..." -ForegroundColor Red
     Move-Item -Path $backupFile -Destination $TargetFile -Force
-    Write-Host "Rollback complete. Original state restored." -ForegroundColor Yellow
+    if (Test-Path $TargetFile) {
+        Write-Host "Rollback complete. Original state restored." -ForegroundColor Yellow
+    } else {
+        Write-Host "[-] [CRITICAL] Failed verifying restored target file!" -ForegroundColor Red
+    }
     exit 1
 }
 Write-Host "   -> Security defect verified ELIMINATED." -ForegroundColor Green
@@ -98,7 +137,9 @@ if ($TestCommand) {
         Write-Host "`n[REJECTED] Functional regression detected! Tests failed after patch." -ForegroundColor Red
         Write-Host "Initiating immediate rollback..." -ForegroundColor Red
         Move-Item -Path $backupFile -Destination $TargetFile -Force
-        Write-Host "Rollback complete. Original state restored." -ForegroundColor Yellow
+        if (Test-Path $TargetFile) {
+            Write-Host "Rollback complete. Original state restored." -ForegroundColor Yellow
+        }
         exit 1
     }
     Write-Host "   -> Non-regression verified: All functional tests passed." -ForegroundColor Green
@@ -110,7 +151,11 @@ if (Test-Path $backupFile) {
 }
 
 Write-Host "`n==========================================================" -ForegroundColor Cyan
-Write-Host " [CERTIFIED] PATCH VALIDATED: Zero Defect + Zero Regression" -ForegroundColor Green
+if ($TestCommand) {
+    Write-Host " [CERTIFIED] PATCH VALIDATED: Zero Defect + Zero Regression" -ForegroundColor Green
+} else {
+    Write-Host " [CERTIFIED] PATCH VALIDATED: Zero Security Defect (Functional regression unverified: no test suite executed)" -ForegroundColor Yellow
+}
 Write-Host "==========================================================" -ForegroundColor Cyan
 exit 0
 

@@ -65,7 +65,7 @@ jobs:
           python ./scripts/check-security-baseline.py . --sarif security-report.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
         if: always()
         with:
           sarif_file: security-report.sarif
@@ -94,14 +94,14 @@ jobs:
           python ./scripts/check-dependencies-osv.py . --sarif osv-results.sarif
 
       - name: Upload OSV SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
         if: always()
         with:
           sarif_file: osv-results.sarif
           category: google-osv-supply-chain
 
   container-and-iac-audit:
-    name: Aqua Trivy Container & IaC Misconfiguration Audit
+    name: Aqua Trivy Container, IaC & SBOM Audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -113,21 +113,51 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run Aqua Security Trivy (IaC & Dockerfile Scanner)
-        uses: aquasecurity/trivy-action@master
+      - name: Run Aqua Security Trivy (IaC & Dockerfile Configuration Scanner)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
         with:
           scan-type: 'config'
           hide-progress: true
           format: 'sarif'
-          output: 'trivy-results.sarif'
+          output: 'trivy-config-results.sarif'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Upload Trivy IaC SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
         if: always()
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: trivy-config-results.sarif
           category: aqua-trivy-iac
+
+      - name: Run Aqua Security Trivy (Filesystem Package & Dependency Vulnerability Scanner)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          scan-type: 'fs'
+          hide-progress: true
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy Filesystem SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        if: always()
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: aqua-trivy-filesystem
+
+      - name: Generate CycloneDX SBOM (Software Bill of Materials)
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          scan-type: 'fs'
+          format: 'cyclonedx'
+          output: 'sbom.cdx.json'
+
+      - name: Upload CycloneDX SBOM Artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb99ba841f # v4.6.1
+        if: always()
+        with:
+          name: software-bill-of-materials
+          path: sbom.cdx.json
 
   verified-secrets-audit:
     name: TruffleHog Live-Verified Secret Audit
@@ -143,7 +173,7 @@ jobs:
           persist-credentials: false
 
       - name: TruffleHog OSS (Active Key Verification - Pinned Version)
-        uses: trufflesecurity/trufflehog@v3.88.15
+        uses: trufflesecurity/trufflehog@3af6f54c136363a01aa23dbff6130cb040bb0f82 # v3.88.15
         with:
           path: ./
           extra_args: --only-verified
@@ -166,7 +196,7 @@ jobs:
           python3 ./scripts/check-security-baseline.py . --sarif skills-audit.sarif
 
       - name: Upload Agent Skills SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
         if: always()
         with:
           sarif_file: skills-audit.sarif

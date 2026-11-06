@@ -127,19 +127,25 @@ def check_security_headers_sync(ssot, auto_sync=False):
     if missing_headers:
         errors.append(f"templates/security-headers.json missing headers: {missing_headers}")
 
+    value_mismatches = []
+    for name, expected_val in ssot_required.items():
+        if name in existing_headers and existing_headers[name] != expected_val:
+            value_mismatches.append(f"Header '{name}' value drift. Expected '{expected_val}', found '{existing_headers[name]}'")
+    if value_mismatches:
+        errors.extend(value_mismatches)
+
     missing_strip = [name for name in ssot_strip if name not in existing_strip]
     if missing_strip:
         errors.append(f"templates/security-headers.json missing strip_fingerprinting: {missing_strip}")
 
-    if auto_sync and (missing_headers or missing_strip):
+    if auto_sync and (missing_headers or value_mismatches or missing_strip):
         for name, val in ssot_required.items():
-            if name not in existing_headers:
-                existing_headers[name] = val
+            existing_headers[name] = val
         data["headers"] = existing_headers
         data["strip_fingerprinting"] = sorted(list(set(existing_strip + ssot_strip)))
         with open(headers_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print("  [+] [SYNCED] templates/security-headers.json synchronized with SSOT.")
+        print("  [+] [SYNCED] templates/security-headers.json updated with 100% SSOT value parity.")
 
     return errors
 
@@ -158,25 +164,69 @@ def check_cloudflare_waf_sync(ssot, auto_sync=False):
     with open(tf_waf, "r", encoding="utf-8") as f:
         tf_data = f.read()
 
-    # Verify rate limit sync between JSON and TF
-    rate_rule = next((r for r in waf_data.get("rules", []) if "rate_limit_params" in r), None)
-    if rate_rule:
-        p = rate_rule["rate_limit_params"]
-        threshold = str(p.get("threshold", 5))
-        period = str(p.get("period", 60))
-        timeout = str(p.get("timeout", 900))
-        if f"requests_per_period = {threshold}" not in tf_data:
-            errors.append("Cloudflare Terraform requests_per_period desynchronized from JSON rate_limit_params")
-        if f"period              = {period}" not in tf_data:
-            errors.append("Cloudflare Terraform period desynchronized from JSON rate_limit_params")
-        if f"mitigation_timeout  = {timeout}" not in tf_data:
-            errors.append("Cloudflare Terraform mitigation_timeout desynchronized from JSON rate_limit_params")
+    # SSOT defined routes & parameters
+    honeypot_routes = ssot.get("honeypot_routes", [])
+    expected_block_routes = set(honeypot_routes)
+    for probe in ssot.get("sensitive_perimeter_probes", []):
+        p = probe.get("path", "")
+        parts = [part for part in p.split("/") if part]
+        if parts:
+            expected_block_routes.add(f"/{parts[0]}")
+
+    auth_cfg = ssot.get("auth_rate_limiting", {})
+    expected_endpoints = auth_cfg.get("endpoints", [])
+    expected_threshold = auth_cfg.get("threshold", 5)
+    expected_period = auth_cfg.get("period_seconds", 60)
+    expected_timeout = auth_cfg.get("mitigation_timeout_seconds", 900)
+
+    # 1. Verify JSON WAF rules
+    recon_rule_json = next((r for r in waf_data.get("rules", []) if "honeypot" in r.get("name", "").lower() or "reconnaissance" in r.get("name", "").lower()), None)
+    if recon_rule_json:
+        expr = recon_rule_json.get("expression", "")
+        for route in expected_block_routes:
+            if route not in expr:
+                errors.append(f"Cloudflare WAF JSON reconnaissance rule missing route: {route}")
+    else:
+        errors.append("Cloudflare WAF JSON missing reconnaissance blocking rule")
+
+    rate_rule_json = next((r for r in waf_data.get("rules", []) if "rate_limit_params" in r), None)
+    if rate_rule_json:
+        expr = rate_rule_json.get("expression", "")
+        for ep in expected_endpoints:
+            if ep not in expr:
+                errors.append(f"Cloudflare WAF JSON rate limiting missing endpoint: {ep}")
+        p = rate_rule_json.get("rate_limit_params", {})
+        if p.get("threshold") != expected_threshold:
+            errors.append(f"Cloudflare WAF JSON threshold {p.get('threshold')} != SSOT {expected_threshold}")
+        if p.get("period") != expected_period:
+            errors.append(f"Cloudflare WAF JSON period {p.get('period')} != SSOT {expected_period}")
+        if p.get("timeout") != expected_timeout:
+            errors.append(f"Cloudflare WAF JSON timeout {p.get('timeout')} != SSOT {expected_timeout}")
+    else:
+        errors.append("Cloudflare WAF JSON missing rate limiting rule")
+
+    # 2. Verify Terraform WAF rules
+    for route in expected_block_routes:
+        if route not in tf_data:
+            errors.append(f"Cloudflare Terraform WAF missing block route: {route}")
+
+    for ep in expected_endpoints:
+        if ep not in tf_data:
+            errors.append(f"Cloudflare Terraform WAF rate limiting missing endpoint: {ep}")
+
+    if f"requests_per_period = {expected_threshold}" not in tf_data:
+        errors.append(f"Cloudflare Terraform requests_per_period desynchronized from SSOT threshold ({expected_threshold})")
+    if f"period              = {expected_period}" not in tf_data:
+        errors.append(f"Cloudflare Terraform period desynchronized from SSOT period ({expected_period})")
+    if f"mitigation_timeout  = {expected_timeout}" not in tf_data:
+        errors.append(f"Cloudflare Terraform mitigation_timeout desynchronized from SSOT timeout ({expected_timeout})")
 
     return errors
 
 def check_gitleaks_sync(ssot):
     errors = []
     gitleaks_file = os.path.join(ROOT_DIR, "templates", ".gitleaks.toml")
+    root_gitleaks = os.path.join(ROOT_DIR, ".gitleaks.toml")
     if not os.path.isfile(gitleaks_file):
         errors.append(f"templates/.gitleaks.toml not found at {gitleaks_file}")
         return errors
@@ -187,17 +237,36 @@ def check_gitleaks_sync(ssot):
     secret_checks = [c for c in ssot.get("baseline_checks", []) if c.get("category") == "Secrets"]
     for c in secret_checks:
         cid = c["id"]
-        # Basic signature check in toml
         if cid == "SEC-001" and "PRIVATE KEY" not in content:
             errors.append(f".gitleaks.toml missing pattern for {cid} (Private Key)")
         elif cid == "SEC-002" and "AKIA" not in content:
             errors.append(f".gitleaks.toml missing pattern for {cid} (AWS)")
+        elif cid == "SEC-003" and "secret[_-]?key" not in content and "jwt[_-]?token" not in content:
+            errors.append(f".gitleaks.toml missing pattern for {cid} (Bearer/Secret Token)")
         elif cid == "SEC-004" and "ghp" not in content:
             errors.append(f".gitleaks.toml missing pattern for {cid} (GitHub PAT)")
         elif cid == "SEC-005" and "AIza" not in content:
             errors.append(f".gitleaks.toml missing pattern for {cid} (Google AI)")
         elif cid == "SEC-006" and "sk_live" not in content:
             errors.append(f".gitleaks.toml missing pattern for {cid} (Stripe)")
+        elif cid == "SEC-007" and "postgres" not in content:
+            errors.append(f".gitleaks.toml missing pattern for {cid} (Database URI)")
+
+    # Validate regex compilation of all rules in .gitleaks.toml
+    rule_patterns = re.findall(r'regex\s*=\s*(?:\'\'\'|\"\"\")(.*?)(?:\'\'\'|\"\"\")', content, re.DOTALL)
+    for idx, pat in enumerate(rule_patterns):
+        pat_clean = pat.strip()
+        try:
+            re.compile(pat_clean)
+        except re.error as e:
+            errors.append(f".gitleaks.toml rule #{idx+1} has invalid regex: {e}")
+
+    # Verify root .gitleaks.toml parity with templates/.gitleaks.toml
+    if os.path.isfile(root_gitleaks):
+        with open(root_gitleaks, "r", encoding="utf-8") as rf:
+            root_content = rf.read()
+        if root_content != content:
+            errors.append("Root .gitleaks.toml has drifted from templates/.gitleaks.toml")
 
     return errors
 

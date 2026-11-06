@@ -17,6 +17,7 @@
 2. [Los 6 Pilares de la Ciberdefensa Militar](#-los-6-pilares-de-la-ciberdefensa-militar)
 3. [Estructura del Proyecto y Catálogo de Componentes](#-estructura-del-proyecto-y-catálogo-de-componentes)
 4. [Capacidades y Doctrinas de Seguridad Integradas](#-capacidades-y-doctrinas-de-seguridad-integradas)
+   - [Distinción: Herramientas Automatizadas vs. Recomendaciones](#️-distinción-explícita-herramientas-automatizadas-vs-recomendaciones-arquitectónicas)
 5. [Guía Paso a Paso: Cómo Utilizar el Proyecto](#-guía-paso-a-paso-cómo-utilizar-el-proyecto)
    - [Paso 0: Requisitos Previos](#paso-0-requisitos-previos)
    - [Paso 1: Instalación y Activación](#paso-1-instalación-y-activación)
@@ -145,6 +146,30 @@ military-cyberdefense-skill/
 
 ---
 
+### ⚖️ Distinción Explícita: Herramientas Automatizadas vs. Recomendaciones Arquitectónicas
+
+Para evitar falsas sensaciones de seguridad y garantizar total transparencia técnica, este repositorio diferencia explícitamente dos tipos de componentes:
+
+#### 1. Herramientas y Controles Automatizados Implementados (Ejecutables y Verificados)
+Son scripts y pipelines totalmente funcionales que no requieren librerías de terceros (operan con biblioteca estándar de Python 3 y PowerShell) y que cuentan con suites de pruebas unitarias y de regresión automatizadas:
+- **`scripts/check-security-baseline.py` / `.ps1`:** Motor híbrido SAST (28 reglas regex SSOT + análisis sintáctico AST en Python) con soporte Git diff, flags configurables de exclusión (`--exclude-dir`) y exportación SARIF 2.1.0. Detección estricta de dotfiles (`.env`, `.env.local`, `.npmrc`, `.pypirc`, `.htpasswd`, etc.) y reporte de archivos no legibles con código de salida de error (exit 2).
+- **`scripts/check-dependencies-osv.py`:** Auditor de cadena de suministro contra la API de Google OSV.dev con diferenciación estricta de 3 estados (0: Compliant, 1: Vulnerable, 2: Error/Incompleto/No verificado) y compatibilidad con 7 formatos de lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `poetry.lock`, `Cargo.lock`, `go.sum`).
+- **`scripts/check-file-integrity.py`:** Monitor criptográfico FIM con HMAC-SHA384 y SHA-256, soporte seguro de secreto por variable de entorno (`DEFCON_FIM_SECRET`) y reporte de discrepancias.
+- **`scripts/check-live-endpoint.py`:** Auditor perimetral externo en vivo con mitigación estricta SSRF (resolución DNS, bloqueo de rangos privados/loopback/cloud-metadata y control de redirecciones), validación semántica de fortaleza de cabeceras (`nosniff`, `SAMEORIGIN`/`DENY`, CSP, HSTS) y comprobación RFC 9116 `security.txt`. Requiere autorización explícita (`--authorized`) para auditorías sobre dominios externos.
+- **`scripts/patch-and-reverify.py` / `.ps1`:** Arnés de remediación quirúrgica ejecutado sin `shell=True`, con verificación de línea base funcional previa, simulación con `--dry-run`, restauración post-rollback verificada y confirmación obligatoria (`--confirm`) antes de alterar código fuente.
+- **`scripts/sync-and-validate.py` / `.ps1`:** Guardián de paridad 100% semántica entre SSOT (`rules/security-rules.json`), templates de WAF (JSON y Terraform), cabeceras HTTP y reglas Gitleaks.
+- **`.github/workflows/defense-gate.yml`:** Pipeline CI/CD con todas las acciones fijadas por commit SHA inmutable, escaneo IaC, escaneo de paquetes del sistema de archivos, generación y carga de SBOM CycloneDX.
+
+#### 2. Recomendaciones Arquitectónicas, Guías de Diseño y Plantillas de Hardening (Manuales y Templates)
+Son especificaciones de ingeniería y plantillas de configuración que el operador o el agente de IA debe implementar, adaptar y validar en el software o infraestructura destino:
+- **Plantillas de Infraestructura (`templates/`):** `Dockerfile.hardened` (Node.js Alpine fijado por digest SHA-256 o alternativa Google Distroless), `docker-compose.hardened.yml` (aislamiento en red interna, sin puertos expuestos a host, contraseñas obligatorias por variables de entorno `${...:?err}`, límites de CPU/RAM y rotación de logs), `cloudflare-waf-rules.json` / `cloudflare-waf.tf`, `nginx.hardened.conf`, `k8s-network-policy.yaml`.
+- **Doctrinas de Diseño (`references/*.md`):** Principios de Zero Trust (NIST SP 800-207), Criptografía CNSA 2.0 y Post-Cuántica, RASP y Anti-Tampering (Frida, Root, Debuggers), Hardening de Operador y Checklist OWASP ASVS Nivel 3.
+
+> [!IMPORTANT]
+> Las plantillas y guías representan patrones de diseño de alta seguridad recomendados. No constituyen un servicio gestionado que se aplique automáticamente fuera del repositorio, ni sustituyen la revisión de arquitectura contextualizada y el modelado de amenazas del proyecto destino.
+
+---
+
 ## 🚀 Guía Paso a Paso: Cómo Utilizar el Proyecto
 
 ### Paso 0: Requisitos Previos
@@ -228,7 +253,7 @@ python scripts/check-security-baseline.py ./ --sarif security-report.sarif
 
 ### Paso 4: Auditoría de Dependencias y Cadena de Suministro (Google OSV)
 
-Inspecciona tus archivos de bloqueo (`package-lock.json`, `requirements.txt`, `Cargo.lock`, `go.sum`, `poetry.lock`) contra la base de datos de vulnerabilidades en tiempo real de Google OSV.dev:
+Inspecciona tus archivos de bloqueo contra la base de datos de vulnerabilidades en tiempo real de Google OSV.dev. Soporta **7 formatos estándar**: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `poetry.lock`, `Cargo.lock` y `go.sum`:
 
 ```bash
 python scripts/check-dependencies-osv.py ./
@@ -239,6 +264,11 @@ Para generar un reporte SARIF para el pipeline:
 python scripts/check-dependencies-osv.py ./ --sarif osv-vulnerabilities.sarif
 ```
 
+**Estados de salida estrictos (Fail-Secure):**
+- **Código `0` (DEFCON-5 / COMPLIANT):** Escaneo completado con 0 vulnerabilidades conocidas.
+- **Código `1` (REMEDIATION REQUIRED):** Se detectaron dependencias con CVEs activos.
+- **Código `2` (UNVERIFIED / ERROR):** Ocurrió un error de red/API o fallo de parseo de lockfiles. Nunca declara un proyecto como seguro si la auditoría no pudo completarse.
+
 ---
 
 ### Paso 5: Monitoreo Criptográfico de Integridad de Archivos (FIM / Wazuh)
@@ -247,7 +277,12 @@ Permite certificar que ningún archivo ejecutable, binario, script o archivo de 
 
 #### 1. Generar la Línea Base (Baseline) en Tiempo de Despliegue:
 ```bash
+# Vía parámetro de línea de comandos:
 python scripts/check-file-integrity.py /ruta/a/mi-app --init fim-baseline.json --secret "MI_CLAVE_HMAC_SECRETA"
+
+# O vía variable de entorno segura (para evitar fuga en tablas de procesos del SO):
+export DEFCON_FIM_SECRET="MI_CLAVE_HMAC_SECRETA"
+python scripts/check-file-integrity.py /ruta/a/mi-app --init fim-baseline.json
 ```
 
 #### 2. Verificar la Integridad en Tiempo de Ejecución / Producción:
@@ -260,36 +295,53 @@ python scripts/check-file-integrity.py /ruta/a/mi-app --verify fim-baseline.json
 
 ### Paso 6: Auditoría Perimetral de Endpoints y EASM en Vivo
 
-Evalúa la seguridad externa de tu servidor o aplicación en producción en cuestión de segundos:
+Evalúa la seguridad externa de tu servidor o aplicación en producción en cuestión de segundos. Requiere el flag `--authorized` para auditar dominios externos en cumplimiento de estándares éticos y legales:
 
 ```bash
-python scripts/check-live-endpoint.py https://mi-dominio.com --json perimetro-report.json
+python scripts/check-live-endpoint.py https://mi-dominio.com --authorized --json perimetro-report.json
 ```
 
-**Verificaciones automáticas ejecutadas:**
-- Cifrado HTTPS y calidad de transporte TLS.
-- Presencia y configuración de cabeceras de seguridad (`Strict-Transport-Security`, `Content-Security-Policy`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`).
-- Supresión de huellas de servidor (`Server`, `X-Powered-By`, etc.).
-- Exposición pública de repositorios Git (`/.git/HEAD`) o variables de entorno (`/.env`).
-- Archivo RFC 9116 `/.well-known/security.txt`.
-- Configuración de políticas anti-suplantación de correo DNS (DMARC).
+*Para evaluar endpoints en entornos locales o redes privadas durante desarrollo:*
+```bash
+python scripts/check-live-endpoint.py http://localhost:3000 --allow-internal
+```
+
+**Verificaciones automáticas y defensas integradas:**
+- **Protección Anti-SSRF:** Bloqueo automático de servicios de metadatos cloud (`169.254.169.254`, `metadata.google.internal`), resolución DNS y bloqueo de rangos privados/loopback RFC 1918.
+- **SSRFSafeRedirectHandler:** Control de redirecciones HTTP para impedir saltos no autorizados a servicios internos.
+- **Cifrado HTTPS y calidad de transporte TLS:** Detección de versiones obsoletas (TLS 1.0/1.1) y cálculo de días restantes de vigencia de certificados.
+- **Fortaleza semántica de cabeceras:** Comprobación estricta de directivas (`nosniff`, `DENY`/`SAMEORIGIN`, HSTS con `max-age` $\ge 6$ meses, CSP estricto auditando `unsafe-inline` y `unsafe-eval`).
+- **Supresión de huellas de servidor:** Detección de cabeceras indiscretas (`Server`, `X-Powered-By`, `X-Runtime`).
+- **Exposición pública de archivos sensibles:** Sondas honeypot a `/.git/HEAD` y `/.env`.
+- **Estándar RFC 9116 `security.txt`:** Validación de campos obligatorios `Contact:`, `Expires:` y verificación de vigencia futura.
+- **Anti-suplantación DNS (DMARC y SPF):** Consultas DNS seguras vía DNS-over-HTTPS.
 
 ---
 
 ### Paso 7: Protocolo de Parcheo Quirúrgico y Re-Verificación
 
-Cuando identifiques una vulnerabilidad, utiliza el arnés de remediación automática para aplicar la corrección sin provocar regresiones funcionales ni romper la experiencia de usuario:
+Cuando identifiques una vulnerabilidad, utiliza el arnés de remediación para aplicar correcciones mínimas efectivas sin provocar regresiones funcionales ni romper la experiencia de usuario:
 
+#### Simulación previa sin modificar archivos (Dry-Run):
 ```bash
+python scripts/patch-and-reverify.py src/auth/login.py --dry-run
+```
+
+#### Aplicación de parche con verificación y confirmación:
+```bash
+# Modo interactivo (solicita autorización al operador):
 python scripts/patch-and-reverify.py src/auth/login.py --test "pytest"
+
+# Modo no interactivo / CI-CD (requiere autorización explícita con --confirm):
+python scripts/patch-and-reverify.py src/auth/login.py --test "pytest" --non-interactive --confirm
 ```
 
 **Mecanismo de Doble Verificación:**
-1. Crea un respaldo temporal del archivo original.
-2. Aplica la corrección quirúrgica.
-3. Ejecuta el escáner de seguridad para certificar que el defecto fue eliminado.
-4. Ejecuta la suite de pruebas del proyecto (`pytest`, `npm test`, `cargo test`).
-5. **Auto-Rollback:** Si los tests fallan o la vulnerabilidad persiste, restaura automáticamente el archivo original a su estado intacto.
+1. **Línea Base Funcional Previa:** Ejecuta el comando de pruebas (`--test`) antes de tocar el archivo. Si los tests ya fallan, aborta la operación para no aplicar parches sobre un código roto (a menos que se pase `--allow-dirty`).
+2. **Copia de Respaldo Inmutable:** Guarda el estado original en un archivo `.defcon.bak`.
+3. **Eliminación del Defecto de Seguridad:** Ejecuta el escáner baseline y confirma 0 violaciones de seguridad.
+4. **Verificación de No-Regresión Funcional:** Re-ejecuta la suite de pruebas del proyecto (`pytest`, `npm test`, `cargo test`) certificando que la lógica funcional no fue alterada.
+5. **Auto-Rollback con Verificación:** Si los tests fallan o la vulnerabilidad persiste, revierte automáticamente al archivo original y verifica criptográficamente la restauración.
 
 ---
 
@@ -326,11 +378,14 @@ El directorio `references/` contiene especificaciones completas para profundizar
 
 ## 🔄 Integración en Pipelines CI/CD
 
-El repositorio incluye la plantilla lista para producción `templates/github-defense-gate.yml`, la cual puede integrarse en `.github/workflows/` para ejecutar automáticamente en cada Pull Request:
-1. **Auditoría de Secretos:** Detección estática con Gitleaks y verificación activa de credenciales vivas con TruffleHog.
-2. **Auditoría de Código y Paridad:** Ejecución de `sync-and-validate.py` y `check-security-baseline.py` con exportación de resultados a la pestaña de GitHub Code Scanning (SARIF).
-3. **Auditoría de Cadena de Suministro:** Escaneo continuo contra Google OSV.dev.
-4. **Escaneo de Contenedores e IaC:** Análisis de vulnerabilidades y malas configuraciones con Aqua Security Trivy.
+El repositorio incluye la plantilla lista para producción `templates/github-defense-gate.yml` (e implementada en `.github/workflows/defense-gate.yml`), la cual puede integrarse en cualquier repositorio para ejecutar defensas automatizadas en cada Pull Request y Push:
+1. **Inmutabilidad y Anti-Supply Chain:** Todas las GitHub Actions externas están **estrictamente fijadas por commit SHA inmutable** con `persist-credentials: false` y permisos mínimos.
+2. **Suite de Pruebas Automatizadas:** Ejecución de pruebas unitarias y de regresión funcional.
+3. **Auditoría de Código y Paridad SSOT:** Ejecución de `sync-and-validate.py` (cero desincronización) y `check-security-baseline.py` (motor híbrido con AST) publicando alertas SARIF en GitHub Code Scanning.
+4. **Auditoría de Cadena de Suministro (Google OSV):** Escaneo en tiempo real contra OSV.dev con política Fail-Secure (código 2 ante caídas de red o fallos de parseo).
+5. **Auditoría de Contenedores, IaC y Paquetes de Sistema:** Análisis de malas configuraciones en Dockerfiles/IaC y escaneo de vulnerabilidades en el filesystem con Aqua Security Trivy.
+6. **Generación Automatizada de SBOM:** Creación de **Software Bill of Materials** estándar CycloneDX (`sbom.cdx.json`) publicado como artefacto descargable.
+7. **Auditoría de Secretos Activos (TruffleHog OSS):** Detección y verificación activa de credenciales vivas contra las APIs de proveedores.
 
 ---
 

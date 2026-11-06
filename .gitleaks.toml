@@ -69,3 +69,15 @@ id = "defcon-huggingface-token"
 description = "Hugging Face User Access Token"
 regex = '''\bhf_[a-zA-Z0-9]{34}\b'''
 tags = ["ai", "huggingface", "critical"]
+
+[[rules]]
+id = "defcon-bearer-secret-token"
+description = "Hardcoded Bearer or Secret Token"
+regex = '''(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\s*[:=]\s*['"][a-zA-Z0-9_\-]{20,}['"]'''
+tags = ["token", "generic", "high"]
+
+[[rules]]
+id = "defcon-database-uri-password"
+description = "Hardcoded Database Connection URI with Real Password"
+regex = '''(?i)(postgres|mysql|mongodb)(\+srv)?://[a-zA-Z0-9_\-]+:[a-zA-Z0-9_\-\$%\^&@]{4,}@[a-zA-Z0-9_\-\.]+'''
+tags = ["database", "credentials", "critical"]

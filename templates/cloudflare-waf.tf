@@ -28,7 +28,7 @@ resource "cloudflare_ruleset" "defcon_waf_rules" {
   # Rule 1: Block Reconnaissance & Sensitive File Probing (SpiderFoot EASM Shield)
   rules {
     action      = "block"
-    expression  = "(http.request.uri.path contains \"/phpmyadmin\") or (http.request.uri.path contains \"/.env\") or (http.request.uri.path contains \"/.git\") or (http.request.uri.path contains \"/wp-login.php\") or (http.request.uri.path contains \"/xmlrpc.php\")"
+    expression  = "(http.request.uri.path contains \"/phpmyadmin\") or (http.request.uri.path contains \"/.env\") or (http.request.uri.path contains \"/.git\") or (http.request.uri.path contains \"/wp-login.php\") or (http.request.uri.path contains \"/xmlrpc.php\") or (http.request.uri.path contains \"/.aws\")"
     description = "Instantly drop requests probing for VCS repositories (.git), environment files (.env), or legacy admin consoles"
     enabled     = true
   }

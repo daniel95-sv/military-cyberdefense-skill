@@ -16,7 +16,8 @@
 param (
     [string]$TargetPath = ".",
     [string]$OutputSarif = "",
-    [switch]$GitDiff
+    [switch]$GitDiff,
+    [string[]]$ExcludeDirs = @()
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan
@@ -34,7 +35,18 @@ $script:sarifResults = @()
 
 $excludedDirs = @(
     "node_modules", ".git", ".next", "dist", "build", "vendor",
-    "bin", "obj", ".idea", ".vscode", "coverage", "rules", "tests", "__pycache__"
+    "bin", "obj", ".idea", ".vscode", "coverage", "__pycache__", ".pytest_cache"
+)
+if ($ExcludeDirs -and $ExcludeDirs.Count -gt 0) {
+    $excludedDirs += $ExcludeDirs
+    Write-Host ("Configured Exclusions: {0}" -f ($ExcludeDirs -join ", ")) -ForegroundColor Gray
+}
+
+$toolInternalNames = @(
+    "check-security-baseline.ps1",
+    "check-security-baseline.py",
+    "security-rules.json",
+    ".gitleaks.toml"
 )
 
 # Determine candidate files
@@ -50,7 +62,7 @@ if ($GitDiff) {
                         $relPath = ($relPath -split " -> ")[-1].Trim().Trim('"')
                     }
                     $fileName = [System.IO.Path]::GetFileName($relPath)
-                    if ($fileName -like "check-*" -or $fileName -like "patch-*") {
+                    if ($toolInternalNames -contains $fileName) {
                         continue
                     }
                     $fullPath = Join-Path (Resolve-Path $TargetPath).Path $relPath
@@ -70,7 +82,7 @@ if ($GitDiff) {
     $allFiles = @(Get-ChildItem -Path $TargetPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
         $filePath = $_.FullName
         $fileName = $_.Name
-        if ($fileName -like "check-*" -or $fileName -like "patch-*") {
+        if ($toolInternalNames -contains $fileName) {
             return $false
         }
         $isExcluded = $false
@@ -114,9 +126,25 @@ function Test-RegexInFiles {
     $candidates = @($allFiles | Where-Object {
         $ext = $_.Extension.ToLower()
         $name = $_.Name
-        # Match by extension, OR by exact filename for extensionless files (e.g., "Dockerfile")
-        ($Extensions.Count -eq 0 -or ($Extensions -contains $ext) -or
-         ($Extensions -contains "" -and ($name -eq "Dockerfile" -or $name -like "Dockerfile.*")))
+        $nameLower = $name.ToLower()
+        
+        $matches = ($Extensions.Count -eq 0) -or ($Extensions -contains $ext)
+        if (-not $matches -and ($Extensions -contains ".env")) {
+            if ($nameLower -eq ".env" -or $nameLower -like ".env.*" -or $nameLower -like "*.env") {
+                $matches = $true
+            }
+        }
+        if (-not $matches -and ($Extensions -contains "")) {
+            if ($name -eq "Dockerfile" -or $name -like "Dockerfile.*" -or $ext -eq "") {
+                $matches = $true
+            }
+        }
+        if (-not $matches -and (($Extensions -contains ".env") -or ($Extensions -contains ".json") -or ($Extensions -contains ".conf"))) {
+            if ($nameLower -in @(".npmrc", ".pypirc", ".htpasswd", "credentials", "id_rsa", "id_ed25519")) {
+                $matches = $true
+            }
+        }
+        $matches
     })
 
     $matched = @()

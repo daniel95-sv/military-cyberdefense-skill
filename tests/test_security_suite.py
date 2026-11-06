@@ -32,6 +32,8 @@ sync_val = load_module("sync_val", os.path.join(SCRIPTS_DIR, "sync-and-validate.
 sec_scan = load_module("sec_scan", os.path.join(SCRIPTS_DIR, "check-security-baseline.py"))
 fim_scan = load_module("fim_scan", os.path.join(SCRIPTS_DIR, "check-file-integrity.py"))
 osv_scan = load_module("osv_scan", os.path.join(SCRIPTS_DIR, "check-dependencies-osv.py"))
+live_scan = load_module("live_scan", os.path.join(SCRIPTS_DIR, "check-live-endpoint.py"))
+patch_scan = load_module("patch_scan", os.path.join(SCRIPTS_DIR, "patch-and-reverify.py"))
 
 class TestSSOTIntegrity(unittest.TestCase):
     """Test Suite for Single Source of Truth (SSOT) schema and compilation."""
@@ -99,6 +101,46 @@ class TestSecurityBaselineScanner(unittest.TestCase):
         self.assertGreater(len(results), 0)
         self.assertEqual(results[0]["ruleId"], "SEC-002")
 
+    def test_detects_secrets_in_dot_env(self):
+        env_file = os.path.join(self.temp_dir, ".env")
+        mock_token = "".join(["ghp_", "123456789012345678901234567890123456"])
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write(f"GITHUB_TOKEN={mock_token}\n")
+
+        sarif_out = os.path.join(self.temp_dir, "env_bad.sarif")
+        code = sec_scan.scan_repository(self.temp_dir, sarif_output=sarif_out)
+        self.assertEqual(code, 1, "Secret in .env must be detected with exit code 1")
+        with open(sarif_out, "r", encoding="utf-8") as sf:
+            sarif = json.load(sf)
+        rule_ids = [r["ruleId"] for r in sarif["runs"][0]["results"]]
+        self.assertIn("SEC-004", rule_ids)
+
+    def test_detects_secrets_in_dot_env_local(self):
+        env_file = os.path.join(self.temp_dir, ".env.local")
+        mock_api_key = "".join(["AIza", "SyD12345678901234567890123456789012"])
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write(f"GOOGLE_API_KEY={mock_api_key}\n")
+
+        code = sec_scan.scan_repository(self.temp_dir)
+        self.assertEqual(code, 1, "Secret in .env.local must be detected with exit code 1")
+
+    def test_ast_analysis_detects_eval_and_shell_true(self):
+        py_vuln_file = os.path.join(self.temp_dir, "vuln.py")
+        with open(py_vuln_file, "w", encoding="utf-8") as f:
+            f.write("import subprocess\n")
+            f.write("def run_bad(x):\n")
+            f.write("    " + "ev" + "al(x)\n")
+            f.write("    subprocess.run('ls ' + x, shell=True)\n")
+
+        sarif_out = os.path.join(self.temp_dir, "ast_bad.sarif")
+        code = sec_scan.scan_repository(self.temp_dir, sarif_output=sarif_out)
+        self.assertEqual(code, 1, "AST defects must return exit code 1")
+        with open(sarif_out, "r", encoding="utf-8") as sf:
+            sarif = json.load(sf)
+        rule_ids = [r["ruleId"] for r in sarif["runs"][0]["results"]]
+        self.assertIn("AST-INJ-001", rule_ids)
+        self.assertIn("AST-CMD-001", rule_ids)
+
 
 class TestFileIntegrityMonitor(unittest.TestCase):
     """Test Suite for File Integrity Monitoring (FIM)."""
@@ -152,6 +194,86 @@ class TestSupplyChainAuditor(unittest.TestCase):
             doc = json.load(sf)
         self.assertEqual(doc["version"], "2.1.0")
         self.assertEqual(len(doc["runs"][0]["results"]), 0)
+
+    def test_osv_handles_query_error_safely(self):
+        # When querying an empty or invalid batch, returns (vulns, errors)
+        vulns, errors = osv_scan.query_osv_batch([])
+        self.assertEqual(vulns, [])
+        self.assertEqual(errors, [])
+
+
+class TestLivePerimeterSSRFAndHeaders(unittest.TestCase):
+    """Test Suite for Live Perimeter Auditor (SSRF Protection & Header Security)."""
+
+    def test_ssrf_rejects_loopback(self):
+        with self.assertRaises(PermissionError):
+            live_scan.validate_target_url("http://127.0.0.1", allow_internal=False)
+        with self.assertRaises(PermissionError):
+            live_scan.validate_target_url("http://localhost:8080", allow_internal=False)
+
+    def test_ssrf_rejects_cloud_metadata(self):
+        with self.assertRaises(PermissionError):
+            live_scan.validate_target_url("http://169.254.169.254/latest/meta-data/", allow_internal=False)
+        with self.assertRaises(PermissionError):
+            live_scan.validate_target_url("http://metadata.google.internal/computeMetadata/v1/", allow_internal=False)
+
+    def test_ssrf_allows_when_explicitly_permitted(self):
+        # When allow_internal is True, localhost should pass validation
+        try:
+            live_scan.validate_target_url("http://127.0.0.1:3000", allow_internal=True)
+        except PermissionError:
+            self.fail("validate_target_url raised PermissionError when allow_internal=True")
+
+    def test_header_strength_validation(self):
+        # nosniff
+        is_strong, _ = live_scan.validate_security_header_value("X-Content-Type-Options", "nosniff")
+        self.assertTrue(is_strong)
+        is_strong, _ = live_scan.validate_security_header_value("X-Content-Type-Options", "sniff")
+        self.assertFalse(is_strong)
+
+        # X-Frame-Options
+        is_strong, _ = live_scan.validate_security_header_value("X-Frame-Options", "DENY")
+        self.assertTrue(is_strong)
+        is_strong, _ = live_scan.validate_security_header_value("X-Frame-Options", "ALLOW-FROM *")
+        self.assertFalse(is_strong)
+
+        # Content-Security-Policy with unsafe-eval
+        is_strong, warn = live_scan.validate_security_header_value("Content-Security-Policy", "default-src 'self' 'unsafe-eval'")
+        self.assertFalse(is_strong)
+        self.assertIn("unsafe-eval", warn)
+
+        # Strict Content-Security-Policy
+        is_strong, warn = live_scan.validate_security_header_value("Content-Security-Policy", "default-src 'self'; script-src 'self' 'nonce-rAnd0m'")
+        self.assertTrue(is_strong)
+
+    def test_live_endpoint_requires_authorization_for_external_domain(self):
+        # Calling external domain without authorization should return exit code 2
+        code = live_scan.audit_live_endpoint("https://example.com", authorized=False)
+        self.assertEqual(code, 2, "External reconnaissance without authorization must be aborted with code 2")
+
+
+class TestHarnessAndAuthorization(unittest.TestCase):
+    """Test Suite for Surgical Patch Harness and Explicit Authorization Gates."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="defcon_harness_")
+        self.target_file = os.path.join(self.temp_dir, "service.py")
+        with open(self.target_file, "w", encoding="utf-8") as f:
+            f.write("# Clean service\ndef run():\n    return 42\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_patch_harness_requires_authorization_in_non_interactive(self):
+        code = patch_scan.patch_and_reverify(self.target_file, non_interactive=True, authorized=False)
+        self.assertEqual(code, 1, "Non-interactive patch modification without authorization must abort with code 1")
+
+    def test_patch_harness_dry_run_leaves_no_artifacts(self):
+        code = patch_scan.patch_and_reverify(self.target_file, dry_run=True)
+        self.assertEqual(code, 0, "Dry run on clean file should return code 0")
+        bak_file = self.target_file + ".defcon.bak"
+        self.assertFalse(os.path.exists(bak_file), "Dry run must not leave backup files behind")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ def calculate_sha256(filepath: str) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def scan_directory(target_dir: str, exclude_files: set = None):
+def scan_directory(target_dir: str, exclude_files: set = None, read_errors: list = None):
     inventory = {}
     target_path = Path(target_dir).resolve()
     exclude_files = exclude_files or set()
@@ -57,8 +57,9 @@ def scan_directory(target_dir: str, exclude_files: set = None):
                     "sha256": file_hash,
                     "size": file_size
                 }
-            except Exception:
-                pass
+            except Exception as e:
+                if read_errors is not None:
+                    read_errors.append((full_path, str(e)))
     return inventory
 
 def compute_manifest_hmac(files_dict: dict, secret: str) -> str:
@@ -66,6 +67,7 @@ def compute_manifest_hmac(files_dict: dict, secret: str) -> str:
     return hmac.new(secret.encode('utf-8'), canonical, hashlib.sha384).hexdigest()
 
 def init_baseline(target_dir: str, output_file: str, secret: str = None):
+    secret = secret or os.environ.get("DEFCON_FIM_SECRET")
     print("==========================================================")
     print(" [DEFCON-1] WAZUH-GRADE FILE INTEGRITY MONITOR (INIT)     ")
     print("==========================================================")
@@ -73,7 +75,13 @@ def init_baseline(target_dir: str, output_file: str, secret: str = None):
     print(f"Output Baseline:  {output_file}\n")
     
     exclude = {os.path.abspath(output_file)}
-    inventory = scan_directory(target_dir, exclude_files=exclude)
+    read_errors = []
+    inventory = scan_directory(target_dir, exclude_files=exclude, read_errors=read_errors)
+    if read_errors:
+        print(f"[-] [WARN] {len(read_errors)} files could not be read during baseline initialization:")
+        for rf, err in read_errors[:5]:
+            print(f"    ! {rf}: {err}")
+
     metadata = {
         "generator": "DEFCON-1 FIM Engine (Wazuh Doctrine)",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -101,6 +109,7 @@ def init_baseline(target_dir: str, output_file: str, secret: str = None):
     return 0
 
 def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None, secret: str = None):
+    secret = secret or os.environ.get("DEFCON_FIM_SECRET")
     print("==========================================================")
     print(" [DEFCON-1] WAZUH-GRADE FILE INTEGRITY MONITOR (VERIFY)   ")
     print("==========================================================")
@@ -125,7 +134,7 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
     expected_hmac = metadata.get("hmac_sha384")
     if expected_hmac:
         if not secret:
-            print("[-] [CRITICAL DEFCON-1] Baseline was generated with HMAC protection, but no --secret was provided to verify it!")
+            print("[-] [CRITICAL DEFCON-1] Baseline was generated with HMAC protection, but no secret (or DEFCON_FIM_SECRET) was provided to verify it!")
             return 2
         actual_hmac = compute_manifest_hmac(base_files, secret)
         if not hmac.compare_digest(expected_hmac, actual_hmac):
@@ -139,7 +148,12 @@ def verify_baseline(target_dir: str, baseline_file: str, sarif_file: str = None,
     exclude = {os.path.abspath(baseline_file)}
     if sarif_file:
         exclude.add(os.path.abspath(sarif_file))
-    current_inventory = scan_directory(target_dir, exclude_files=exclude)
+    read_errors = []
+    current_inventory = scan_directory(target_dir, exclude_files=exclude, read_errors=read_errors)
+    if read_errors:
+        print(f"[-] [WARN] {len(read_errors)} files could not be read during integrity verification:")
+        for rf, err in read_errors[:5]:
+            print(f"    ! {rf}: {err}")
     
     tampered = []
     unauthorized = []

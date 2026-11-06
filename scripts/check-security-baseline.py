@@ -9,6 +9,7 @@ Supports Git differential scanning and OASIS SARIF 2.1.0 output.
 import os
 import re
 import sys
+import ast
 import json
 import subprocess
 import argparse
@@ -16,7 +17,19 @@ from pathlib import Path
 
 EXCLUDED_DIRS = {
     "node_modules", ".git", ".next", "dist", "build", "vendor",
-    "bin", "obj", ".idea", ".vscode", "coverage", "rules", "tests", "__pycache__"
+    "bin", "obj", ".idea", ".vscode", "coverage", "__pycache__", ".pytest_cache"
+}
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Own internal definition files that contain scanner rule patterns and test mocks
+TOOL_INTERNAL_FILES = {
+    os.path.abspath(__file__),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.py")),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "check-security-baseline.ps1")),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "rules", "security-rules.json")),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "security-rules.json")),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".gitleaks.toml")),
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "templates", ".gitleaks.toml")),
 }
 
 FALLBACK_CHECKS = [
@@ -276,6 +289,122 @@ def load_checks():
 
 CHECKS = load_checks()
 
+def file_matches_extensions(file_path: str, allowed_exts: set) -> bool:
+    fname = os.path.basename(file_path)
+    fname_lower = fname.lower()
+    _, ext = os.path.splitext(file_path)
+    ext_lower = ext.lower()
+
+    # 1. Standard extension match (e.g. .py, .ts, .json, .yaml, .tf)
+    if ext_lower and ext_lower in allowed_exts:
+        return True
+
+    # 2. Environment files (.env, .env.local, .env.production, app.env, etc.)
+    if ".env" in allowed_exts:
+        if fname_lower == ".env" or fname_lower.startswith(".env.") or fname_lower.endswith(".env"):
+            return True
+
+    # 3. Dockerfiles
+    if "" in allowed_exts or ".dockerfile" in allowed_exts:
+        if fname_lower == "dockerfile" or fname_lower.startswith("dockerfile.") or ext_lower == ".dockerfile":
+            return True
+
+    # 4. Dotfiles / special credential files (npmrc, pypirc, htpasswd, credentials, pem, key)
+    if any(s in allowed_exts for s in (".env", ".json", ".conf", ".yml", ".yaml")):
+        if fname_lower in (".npmrc", ".pypirc", ".htpasswd", "credentials", "id_rsa", "id_ed25519"):
+            return True
+
+    # 5. Extensionless files when "" in allowed_exts
+    if "" in allowed_exts and not ext_lower:
+        return True
+
+    return False
+
+def run_ast_analysis(file_path: str, content: str):
+    """
+    Parses Python AST to detect structural vulnerabilities:
+    - eval() / exec() dynamic evaluation
+    - subprocess calls with shell=True
+    - requests calls with verify=False
+    - raw SQL formatting in execute calls
+    """
+    ast_findings = []
+    try:
+        tree = ast.parse(content, filename=file_path)
+    except Exception:
+        return ast_findings
+
+    class SecurityVisitor(ast.NodeVisitor):
+        def visit_Call(self, node):
+            func_name = None
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+
+            # 1. eval / exec
+            if func_name in ("eval", "exec") and isinstance(node.func, ast.Name):
+                ast_findings.append({
+                    "id": "AST-INJ-001",
+                    "category": "Injection/AST",
+                    "desc": f"Dangerous dynamic execution via {func_name}()",
+                    "severity": "HIGH",
+                    "line": getattr(node, "lineno", 1),
+                    "text": f"{func_name}(...)"
+                })
+
+            # 2. subprocess calls with shell=True
+            if func_name in ("run", "Popen", "call", "check_call", "check_output"):
+                for kw in node.keywords:
+                    if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                        ast_findings.append({
+                            "id": "AST-CMD-001",
+                            "category": "CommandInjection/AST",
+                            "desc": f"subprocess.{func_name}() invoked with shell=True",
+                            "severity": "HIGH",
+                            "line": getattr(node, "lineno", 1),
+                            "text": f"subprocess.{func_name}(..., shell=True)"
+                        })
+
+            # 3. requests verify=False
+            if func_name in ("get", "post", "put", "delete", "patch", "request"):
+                for kw in node.keywords:
+                    if kw.arg == "verify" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                        ast_findings.append({
+                            "id": "AST-TLS-001",
+                            "category": "Crypto/AST",
+                            "desc": "Insecure HTTP request with TLS certificate verification disabled (verify=False)",
+                            "severity": "CRITICAL",
+                            "line": getattr(node, "lineno", 1),
+                            "text": f"{func_name}(..., verify=False)"
+                        })
+
+            # 4. execute with raw string interpolation
+            if func_name == "execute" and node.args:
+                arg0 = node.args[0]
+                is_sqli = False
+                if isinstance(arg0, ast.JoinedStr):
+                    is_sqli = True
+                elif isinstance(arg0, ast.BinOp) and isinstance(arg0.op, ast.Mod):
+                    is_sqli = True
+                elif isinstance(arg0, ast.Call) and isinstance(arg0.func, ast.Attribute) and arg0.func.attr == "format":
+                    is_sqli = True
+                if is_sqli:
+                    ast_findings.append({
+                        "id": "AST-INJ-002",
+                        "category": "Injection/AST",
+                        "desc": "Potential SQL Injection: unparameterized formatted query passed to execute()",
+                        "severity": "CRITICAL",
+                        "line": getattr(node, "lineno", 1),
+                        "text": "execute(formatted_query)"
+                    })
+
+            self.generic_visit(node)
+
+    visitor = SecurityVisitor()
+    visitor.visit(tree)
+    return ast_findings
+
 def get_git_diff_files(target_dir):
     try:
         res = subprocess.run(["git", "-C", target_dir, "status", "--porcelain"], capture_output=True, text=True, check=True)
@@ -285,28 +414,33 @@ def get_git_diff_files(target_dir):
                 rel = line[3:].strip().strip('"')
                 if " -> " in rel:
                     rel = rel.split(" -> ")[-1].strip().strip('"')
-                fname = os.path.basename(rel)
-                if fname.startswith("check-") or fname.startswith("patch-"):
-                    continue
                 full = os.path.join(target_dir, rel)
+                if os.path.abspath(full) in TOOL_INTERNAL_FILES:
+                    continue
                 if os.path.isfile(full):
                     files.append(full)
         return files
     except Exception:
         return []
 
-def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool = False):
+def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool = False, extra_excluded_dirs: list = None):
     print("==========================================================")
     print(" [DEFCON-1] MILITARY-GRADE CYBERDEFENSE BASELINE SCANNER  ")
     print("==========================================================")
     print(f"Target Directory: {target_path}")
     if git_diff:
         print("Mode: GIT DIFF (Differential scan on changed files only)")
+    if extra_excluded_dirs:
+        print(f"Configured Exclusions: {', '.join(extra_excluded_dirs)}")
     print()
 
     issues_count = 0
     warnings_count = 0
     sarif_results = []
+
+    active_excluded = set(EXCLUDED_DIRS)
+    if extra_excluded_dirs:
+        active_excluded.update(extra_excluded_dirs)
 
     if git_diff:
         all_files = get_git_diff_files(target_path)
@@ -317,51 +451,53 @@ def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool =
     else:
         all_files = []
         for root, dirs, files in os.walk(target_path):
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+            dirs[:] = [d for d in dirs if d not in active_excluded]
             for f in files:
-                if f.startswith("check-") or f.startswith("patch-"):
+                full = os.path.join(root, f)
+                if os.path.abspath(full) in TOOL_INTERNAL_FILES:
                     continue
-                all_files.append(os.path.join(root, f))
+                all_files.append(full)
 
     is_single_file = os.path.isfile(target_path)
 
+    # Read files safely and track unreadable files
+    file_lines = {}
+    unreadable_files = []
+    for fp in all_files:
+        try:
+            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                file_lines[fp] = f.readlines()
+        except Exception as e:
+            unreadable_files.append((fp, str(e)))
+
+    # 1. Regex Baseline Checks
     for check in CHECKS:
         matched_instances = []
-        for file_path in all_files:
-            fname = os.path.basename(file_path)
-            _, ext = os.path.splitext(file_path)
-            ext_lower = ext.lower()
-            matches_ext = (
-                ext_lower in check["exts"] or
-                ("" in check["exts"] and (fname == "Dockerfile" or fname.startswith("Dockerfile.")))
-            )
-            if not matches_ext:
+        for file_path, lines in file_lines.items():
+            if not file_matches_extensions(file_path, check["exts"]):
                 continue
-            try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line_no, line in enumerate(f, start=1):
-                        if check["regex"].search(line):
-                            matched_instances.append({
-                                "file": file_path,
-                                "line": line_no,
-                                "text": line.strip()
-                            })
-                            if sarif_output:
-                                rel = os.path.basename(file_path) if is_single_file else os.path.relpath(file_path, target_path).replace("\\", "/")
-                                sarif_level = "error" if check["severity"] in ("CRITICAL", "HIGH") else "warning"
-                                sarif_results.append({
-                                    "ruleId": check["id"],
-                                    "level": sarif_level,
-                                    "message": {"text": f"[{check['severity']}] {check['category']}: {check['desc']}"},
-                                    "locations": [{
-                                        "physicalLocation": {
-                                            "artifactLocation": {"uri": rel},
-                                            "region": {"startLine": line_no}
-                                        }
-                                    }]
-                                })
-            except Exception:
-                pass
+
+            for line_no, line in enumerate(lines, start=1):
+                if check["regex"].search(line):
+                    matched_instances.append({
+                        "file": file_path,
+                        "line": line_no,
+                        "text": line.strip()
+                    })
+                    if sarif_output:
+                        rel = os.path.basename(file_path) if is_single_file else os.path.relpath(file_path, target_path).replace("\\", "/")
+                        sarif_level = "error" if check["severity"] in ("CRITICAL", "HIGH") else "warning"
+                        sarif_results.append({
+                            "ruleId": check["id"],
+                            "level": sarif_level,
+                            "message": {"text": f"[{check['severity']}] {check['category']}: {check['desc']}"},
+                            "locations": [{
+                                "physicalLocation": {
+                                    "artifactLocation": {"uri": rel},
+                                    "region": {"startLine": line_no}
+                                }
+                            }]
+                        })
 
         if matched_instances:
             sev = check["severity"]
@@ -376,6 +512,45 @@ def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool =
                 issues_count += len(matched_instances)
             else:
                 warnings_count += len(matched_instances)
+
+    # 2. Python AST Analysis Layer (Multi-layer hybrid engine)
+    for file_path, lines in file_lines.items():
+        if file_path.lower().endswith(".py"):
+            content = "".join(lines)
+            ast_issues = run_ast_analysis(file_path, content)
+            for ai in ast_issues:
+                rel_path = os.path.basename(file_path) if is_single_file else os.path.relpath(file_path, target_path)
+                sev = ai["severity"]
+                print(f"[{sev}] {ai['category']}: {ai['desc']}")
+                print(f"   -> Affected: {rel_path}:{ai['line']} (AST analysis)")
+                print()
+                if sev in ("CRITICAL", "HIGH"):
+                    issues_count += 1
+                else:
+                    warnings_count += 1
+                if sarif_output:
+                    rel = rel_path.replace("\\", "/")
+                    sarif_level = "error" if sev in ("CRITICAL", "HIGH") else "warning"
+                    sarif_results.append({
+                        "ruleId": ai["id"],
+                        "level": sarif_level,
+                        "message": {"text": f"[{sev}] {ai['category']}: {ai['desc']}"},
+                        "locations": [{
+                            "physicalLocation": {
+                                "artifactLocation": {"uri": rel},
+                                "region": {"startLine": ai["line"]}
+                            }
+                        }]
+                    })
+
+    if unreadable_files:
+        print(f"[-] [WARN] {len(unreadable_files)} files could not be read during baseline audit:")
+        for uf, err in unreadable_files[:5]:
+            rel = os.path.basename(uf) if is_single_file else os.path.relpath(uf, target_path)
+            print(f"    ! {rel}: {err}")
+        if len(unreadable_files) > 5:
+            print(f"    ... and {len(unreadable_files) - 5} more files.")
+        print()
 
     if sarif_output:
         sarif_doc = {
@@ -400,9 +575,14 @@ def scan_repository(target_path: str, sarif_output: str = None, git_diff: bool =
     print(" SCAN COMPLETE")
     print(f" Critical / High Defects: {issues_count}")
     print(f" Warnings / Medium Risks: {warnings_count}")
+    if unreadable_files:
+        print(f" Unreadable Files       : {len(unreadable_files)}")
     print("==========================================================")
 
     if issues_count == 0 and warnings_count == 0:
+        if unreadable_files:
+            print(" STATUS: UNVERIFIED / WARNING. Some files could not be inspected.")
+            return 2
         print(" STATUS: DEFCON-5 (COMPLIANT). No baseline violations detected.")
         return 0
     else:
@@ -414,6 +594,7 @@ if __name__ == "__main__":
     parser.add_argument("target", nargs="?", default=".", help="Target path to scan")
     parser.add_argument("--sarif", help="Path to export SARIF 2.1.0 report")
     parser.add_argument("--diff", action="store_true", help="Scan only git modified/staged files")
+    parser.add_argument("--exclude-dir", nargs="*", default=[], help="Additional directories to exclude from baseline scanning")
     args = parser.parse_args()
 
-    sys.exit(scan_repository(args.target, sarif_output=args.sarif, git_diff=args.diff))
+    sys.exit(scan_repository(args.target, sarif_output=args.sarif, git_diff=args.diff, extra_excluded_dirs=args.exclude_dir))

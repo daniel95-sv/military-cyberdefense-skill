@@ -16,7 +16,7 @@ from pathlib import Path
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 
-def parse_package_lock(file_path):
+def parse_package_lock(file_path, parse_errors=None):
     packages = []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -37,10 +37,13 @@ def parse_package_lock(file_path):
                 if name and version:
                     packages.append({"name": name, "version": version, "ecosystem": "npm", "file_path": file_path})
     except Exception as e:
-        print(f"[WARN] Failed parsing {file_path}: {e}")
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
     return packages
 
-def parse_requirements_txt(file_path):
+def parse_requirements_txt(file_path, parse_errors=None):
     packages = []
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -54,10 +57,13 @@ def parse_requirements_txt(file_path):
                     version = parts[1].split(";")[0].strip()
                     packages.append({"name": name, "version": version, "ecosystem": "PyPI", "file_path": file_path})
     except Exception as e:
-        print(f"[WARN] Failed parsing {file_path}: {e}")
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
     return packages
 
-def parse_cargo_lock(file_path):
+def parse_cargo_lock(file_path, parse_errors=None):
     """Parse Rust's Cargo.lock (TOML format) for crates.io ecosystem packages."""
     packages = []
     try:
@@ -87,10 +93,13 @@ def parse_cargo_lock(file_path):
                     "file_path": file_path
                 })
     except Exception as e:
-        print(f"[WARN] Failed parsing {file_path}: {e}")
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
     return packages
 
-def parse_poetry_lock(file_path):
+def parse_poetry_lock(file_path, parse_errors=None):
     """Parse Python's poetry.lock (TOML format) for PyPI ecosystem packages."""
     packages = []
     try:
@@ -119,10 +128,13 @@ def parse_poetry_lock(file_path):
                     "file_path": file_path
                 })
     except Exception as e:
-        print(f"[WARN] Failed parsing {file_path}: {e}")
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
     return packages
 
-def parse_go_sum(file_path):
+def parse_go_sum(file_path, parse_errors=None):
     """Parse Go's go.sum for Go ecosystem dependencies."""
     packages = []
     seen = set()
@@ -142,16 +154,94 @@ def parse_go_sum(file_path):
                             "file_path": file_path
                         })
     except Exception as e:
-        print(f"[WARN] Failed parsing {file_path}: {e}")
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
+    return packages
+
+def parse_yarn_lock(file_path, parse_errors=None):
+    """Parse Yarn lockfile (v1 format) for npm ecosystem packages."""
+    packages = []
+    seen = set()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            current_pkgs = []
+            for line in f:
+                line_s = line.strip()
+                if not line_s or line_s.startswith("#"):
+                    continue
+                if line.startswith(" ") or line.startswith("\t"):
+                    if line_s.startswith("version ") or line_s.startswith("version:"):
+                        ver = line_s.split()[1].strip('"').strip("'")
+                        for pkg_name in current_pkgs:
+                            if (pkg_name, ver) not in seen:
+                                seen.add((pkg_name, ver))
+                                packages.append({
+                                    "name": pkg_name,
+                                    "version": ver,
+                                    "ecosystem": "npm",
+                                    "file_path": file_path
+                                })
+                        current_pkgs = []
+                else:
+                    entries = [e.strip().strip('"').strip(':') for e in line_s.split(",")]
+                    current_pkgs = []
+                    for entry in entries:
+                        if "@" in entry:
+                            last_at = entry.rfind("@")
+                            if last_at > 0:
+                                name = entry[:last_at]
+                                current_pkgs.append(name)
+    except Exception as e:
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
+    return packages
+
+def parse_pnpm_lock(file_path, parse_errors=None):
+    """Parse pnpm-lock.yaml (v5/v6/v9 format) for npm ecosystem packages."""
+    packages = []
+    seen = set()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line_s = line.strip()
+                if line_s.endswith(":") and "@" in line_s:
+                    raw = line_s.rstrip(":").strip("'").strip('"').lstrip("/")
+                    last_at = raw.rfind("@")
+                    if last_at > 0:
+                        name = raw[:last_at]
+                        ver = raw[last_at + 1:].split("(")[0].split("_")[0]
+                        if ver and ver[0].isdigit() and (name, ver) not in seen:
+                            seen.add((name, ver))
+                            packages.append({
+                                "name": name,
+                                "version": ver,
+                                "ecosystem": "npm",
+                                "file_path": file_path
+                            })
+    except Exception as e:
+        msg = f"Failed parsing {file_path}: {e}"
+        print(f"[WARN] {msg}")
+        if parse_errors is not None:
+            parse_errors.append(msg)
     return packages
 
 def query_osv_batch(packages):
+    """
+    Queries OSV API for a list of packages.
+    Returns: (all_vulns, query_errors)
+    Where query_errors is a list of error strings if any batch query failed.
+    """
     if not packages:
-        return []
+        return [], []
 
     # Process in chunks of 500 (OSV API limit)
     chunk_size = 500
     all_vulns = []
+    query_errors = []
 
     for i in range(0, len(packages), chunk_size):
         chunk = packages[i:i + chunk_size]
@@ -183,9 +273,11 @@ def query_osv_batch(packages):
                                 "details": v.get("details", "")
                             })
         except Exception as e:
-            print(f"[WARN] OSV.dev query failed: {e}")
+            err_msg = f"OSV.dev query batch [{i}:{i+len(chunk)}] failed: {e}"
+            print(f"[-] [ERROR] {err_msg}")
+            query_errors.append(err_msg)
 
-    return all_vulns
+    return all_vulns, query_errors
 
 def export_sarif(sarif_path, target_dir, vulns):
     sarif_results = []
@@ -233,6 +325,7 @@ def main():
     print(f"Target Directory: {args.target}\n")
 
     packages_to_check = []
+    parse_errors = []
 
     # Check for lockfiles
     for root, dirs, files in os.walk(args.target):
@@ -241,25 +334,38 @@ def main():
             full_path = os.path.join(root, f)
             if f == "package-lock.json":
                 print(f"[*] Detected npm lockfile: {full_path}")
-                packages_to_check.extend(parse_package_lock(full_path))
+                packages_to_check.extend(parse_package_lock(full_path, parse_errors))
             elif f in ("requirements.txt", "requirements-dev.txt"):
                 print(f"[*] Detected PyPI requirements: {full_path}")
-                packages_to_check.extend(parse_requirements_txt(full_path))
+                packages_to_check.extend(parse_requirements_txt(full_path, parse_errors))
             elif f == "Cargo.lock":
                 print(f"[*] Detected Rust Cargo lockfile: {full_path}")
-                packages_to_check.extend(parse_cargo_lock(full_path))
+                packages_to_check.extend(parse_cargo_lock(full_path, parse_errors))
             elif f == "poetry.lock":
                 print(f"[*] Detected Poetry lockfile: {full_path}")
-                packages_to_check.extend(parse_poetry_lock(full_path))
+                packages_to_check.extend(parse_poetry_lock(full_path, parse_errors))
             elif f == "go.sum":
                 print(f"[*] Detected Go sumfile: {full_path}")
-                packages_to_check.extend(parse_go_sum(full_path))
+                packages_to_check.extend(parse_go_sum(full_path, parse_errors))
+            elif f == "yarn.lock":
+                print(f"[*] Detected Yarn lockfile: {full_path}")
+                packages_to_check.extend(parse_yarn_lock(full_path, parse_errors))
+            elif f in ("pnpm-lock.yaml", "pnpm-lock.yml"):
+                print(f"[*] Detected pnpm lockfile: {full_path}")
+                packages_to_check.extend(parse_pnpm_lock(full_path, parse_errors))
 
     # Deduplicate
-    unique_pkgs = {(p["name"], p["version"], p["ecosystem"]): p for p in packages_to_check}.values()
+    unique_pkgs = list({(p["name"], p["version"], p["ecosystem"]): p for p in packages_to_check}.values())
     print(f"[*] Total unique dependencies resolved: {len(unique_pkgs)}")
 
     if not unique_pkgs:
+        if parse_errors:
+            print("\n[-] [ERROR] Lockfiles were found but could not be parsed:")
+            for pe in parse_errors:
+                print(f"   -> {pe}")
+            print("==========================================================")
+            print(" STATUS: UNVERIFIED / ERROR (Parsing failed; cannot certify clean state).")
+            return 2
         print("[*] No supported lockfiles or dependencies found to audit.")
         print("==========================================================")
         print(" STATUS: DEFCON-5 (No third-party packages to inspect).")
@@ -268,12 +374,16 @@ def main():
         return 0
 
     print("[*] Querying Google OSV.dev vulnerability database in real-time...")
-    vulns = query_osv_batch(list(unique_pkgs))
+    vulns, query_errors = query_osv_batch(unique_pkgs)
 
     print("\n==========================================================")
     print(" SUPPLY CHAIN AUDIT REPORT")
     print(f" Dependencies Scanned : {len(unique_pkgs)}")
     print(f" Vulnerabilities Found: {len(vulns)}")
+    if query_errors:
+        print(f" Query Errors / Failed: {len(query_errors)}")
+    if parse_errors:
+        print(f" Lockfile Parse Errors: {len(parse_errors)}")
     print("==========================================================")
 
     if vulns:
@@ -283,16 +393,26 @@ def main():
             print(f"   Summary    : {v['summary'][:120]}...")
             print(f"   Reference  : https://osv.dev/vulnerability/{v['id']}")
 
-        if args.sarif:
-            export_sarif(args.sarif, args.target, vulns)
+    if args.sarif:
+        export_sarif(args.sarif, args.target, vulns)
 
+    # Differentiate the 3 audit states:
+    # 1. Any errors during query or parsing -> Audit incomplete / unverified (exit 2)
+    # 2. Vulnerabilities found -> Remediation required (exit 1)
+    # 3. Clean completed scan with 0 vulnerabilities -> Compliant (exit 0)
+    if query_errors or parse_errors:
+        print("\n[-] [ERROR] OSV supply chain audit could not be fully completed.")
+        for err in (parse_errors + query_errors):
+            print(f"    ! {err}")
+        print("\n STATUS: UNVERIFIED / ERROR. Incomplete audit cannot declare project compliant.")
+        return 2
+
+    if vulns:
         print("\n STATUS: REMEDIATION REQUIRED. Upgrade vulnerable packages.")
         return 1
-    else:
-        if args.sarif:
-            export_sarif(args.sarif, args.target, [])
-        print("\n STATUS: DEFCON-5 (COMPLIANT). 0 known CVEs across all dependencies.")
-        return 0
+
+    print("\n STATUS: DEFCON-5 (COMPLIANT). 0 known CVEs across all dependencies.")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

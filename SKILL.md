@@ -27,6 +27,10 @@ Used when inspecting an existing codebase or preparing for production release:
 - Runs automated threat modeling (STRIDE / MITRE ATT&CK matrix).
 - Identifies single points of failure, cryptographic weaknesses, sensitive data leaks, and insecure defaults, generating the exact patch to eliminate them.
 
+### Distinction: Automated Tools vs. Architectural Recommendations
+- **Automated Verification Tools (Executable & Tested):** Autonomous Python & PowerShell scripts (`scripts/check-security-baseline.py`, `check-dependencies-osv.py`, `check-file-integrity.py`, `check-live-endpoint.py`, `patch-and-reverify.py`, `sync-and-validate.py`) and CI/CD pipelines (`defense-gate.yml`) with zero external pip dependencies.
+- **Architectural Recommendations & Hardening Templates:** Guidelines (`references/*.md`) and declarative templates (`templates/Dockerfile.hardened`, `docker-compose.hardened.yml`, `cloudflare-waf-rules.json`, `cloudflare-waf.tf`, `nginx.hardened.conf`, `k8s-network-policy.yaml`) that serve as recommended patterns to be tailored, implemented, and validated in the target project.
+
 ---
 
 ## The 6 Pillars of Military-Grade Cyberdefense
