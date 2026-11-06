@@ -1,0 +1,85 @@
+# DEFCON-1 Kubernetes Microsegmentation & NetworkPolicy Baseline
+# Implements strict Default-Deny (Ingress & Egress) to stop internal lateral movement (Anti-fscan).
+# References: NIST SP 800-207 (Zero Trust) and references/ZERO-TRUST-AND-AUTH.md
+
+---
+# 1. Baseline: Default-Deny ALL Traffic in Namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: production
+spec:
+  podSelector: {} # Matches all pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# 2. Allow CoreDNS egress for all workloads (Mandatory for name resolution)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: production
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# 3. Fine-Grained Ingress & Egress for Application Pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-microsegmentation
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Accept ingress ONLY from the designated Ingress Controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # Allow egress ONLY to authorized database and cache pods
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis-cache
+      ports:
+        - protocol: TCP
+          port: 6379
+

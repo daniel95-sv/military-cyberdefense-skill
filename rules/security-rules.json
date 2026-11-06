@@ -1,0 +1,314 @@
+{
+  "version": "2.0.0",
+  "description": "Single Source of Truth (SSOT) for DEFCON-1 Military Cyberdefense Rules, Headers, and Threat Patterns.",
+  "baseline_checks": [
+    {
+      "id": "SEC-001",
+      "category": "Secrets",
+      "desc": "Hardcoded Private Key Block",
+      "regex": "BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY",
+      "exts": [".ts", ".js", ".json", ".env", ".py", ".dart", ".kt", ".swift", ".yml", ".yaml", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "SEC-002",
+      "category": "Secrets",
+      "desc": "Hardcoded AWS Access Key",
+      "regex": "(?i)AKIA[0-9A-Z]{16}",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "SEC-003",
+      "category": "Secrets",
+      "desc": "Hardcoded Bearer / Secret Token",
+      "regex": "(?i)(api[_-]?key|secret[_-]?key|jwt[_-]?token)\\s*[:=]\\s*['\"][a-zA-Z0-9_\\-]{20,}['\"]",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".go", ".rs", ".rb", ".php"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "SEC-004",
+      "category": "Secrets",
+      "desc": "Hardcoded GitHub Personal Token",
+      "regex": "ghp_[0-9a-zA-Z]{36}",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "SEC-005",
+      "category": "Secrets",
+      "desc": "Hardcoded Google / Gemini API Key",
+      "regex": "AIza[0-9A-Za-z\\-_]{35}",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "SEC-006",
+      "category": "Secrets",
+      "desc": "Hardcoded Stripe Live Secret Key",
+      "regex": "sk_live_[0-9a-zA-Z]{24}",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".kt", ".swift", ".env", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "SEC-007",
+      "category": "Secrets",
+      "desc": "Hardcoded Database URI with Real Password",
+      "regex": "(?i)(postgres|mysql|mongodb)(\\+srv)?://[a-zA-Z0-9_\\-]+:[a-zA-Z0-9_\\-\\$%\\^&@]{4,}@[a-zA-Z0-9_\\-\\.]+",
+      "exts": [".ts", ".js", ".json", ".py", ".dart", ".env", ".go", ".rs", ".rb", ".php"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "CRY-001",
+      "category": "Crypto",
+      "desc": "Broken Hashing Algorithm (MD5/SHA1)",
+      "regex": "(?i)(createHash\\(['\"]md5['\"]|createHash\\(['\"]sha1['\"]|MessageDigest\\.getInstance\\(['\"]MD5['\"]|MessageDigest\\.getInstance\\(['\"]SHA-?1['\"])",
+      "exts": [".ts", ".js", ".java", ".kt", ".py", ".dart", ".cs"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "CRY-002",
+      "category": "Crypto",
+      "desc": "Insecure Random Generator (Not CSPRNG)",
+      "regex": "(?i)(Math\\.random\\(\\)|random\\.random\\(\\)|Random\\.nextInt\\(\\))",
+      "exts": [".ts", ".js", ".java", ".kt", ".py", ".dart"],
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "CRY-003",
+      "category": "Crypto",
+      "desc": "Insecure Cipher Mode (AES-ECB)",
+      "regex": "(?i)(AES/ECB/|mode\\s*:\\s*['\"]ECB['\"])",
+      "exts": [".ts", ".js", ".java", ".kt", ".py", ".cs"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "INJ-001",
+      "category": "Injection",
+      "desc": "Dangerous Dynamic Evaluation (eval/exec)",
+      "regex": "(?i)(\\beval\\s*\\(|\\bexec\\s*\\(|\\bFunction\\s*\\(.*new)",
+      "exts": [".ts", ".js", ".py", ".php"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "INJ-002",
+      "category": "Injection",
+      "desc": "Unsanitized Raw HTML Injection (XSS Vector)",
+      "regex": "(?i)(innerHTML\\s*=|dangerouslySetInnerHTML)",
+      "exts": [".ts", ".tsx", ".js", ".jsx"],
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "INJ-003",
+      "category": "Injection",
+      "desc": "Raw SQL Concatenation (SQLi Risk)",
+      "regex": "(?i)(query\\s*\\(\\s*['\"`].*\\$\\{.*\\}.*['\"`]|SELECT\\s+.*\\s+FROM\\s+.*['\"]\\s*\\+)",
+      "exts": [".ts", ".js", ".py", ".java", ".kt", ".cs"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "INJ-004",
+      "category": "Injection",
+      "desc": "Unconfined Path Concatenation (Traversal Risk)",
+      "regex": "(?i)(readFile\\s*\\(\\s*path\\.join\\s*\\(|readFile\\s*\\(.*\\+.*req\\.)",
+      "exts": [".ts", ".js", ".py"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "CFG-001",
+      "category": "Android",
+      "desc": "Cleartext Traffic Allowed in Manifest",
+      "regex": "android:usesCleartextTraffic\\s*=\\s*['\"]true['\"]",
+      "exts": [".xml"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "CFG-002",
+      "category": "Android",
+      "desc": "Insecure Application Backup Enabled",
+      "regex": "android:allowBackup\\s*=\\s*['\"]true['\"]",
+      "exts": [".xml"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "CFG-003",
+      "category": "Web",
+      "desc": "Overly Permissive Wildcard CORS with Credentials",
+      "regex": "(?i)Access-Control-Allow-Origin.*[\\*]",
+      "exts": [".ts", ".js", ".py", ".go", ".conf", ".json"],
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "API-001",
+      "category": "API/JWT",
+      "desc": "Dangerous JWT 'none' Algorithm Allowed",
+      "regex": "(?i)(algorithms\\s*:\\s*\\[.*['\"]none['\"].*\\]|\"alg\"\\s*:\\s*\"none\")",
+      "exts": [".ts", ".js", ".py", ".json"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "API-002",
+      "category": "API/Fingerprint",
+      "desc": "Leaked Server Fingerprinting Header",
+      "regex": "(?i)(Server-Tokens\\s+on|add_header\\s+['\"]?X-Powered-By|setHeader\\s*\\([^)]*X-Powered-By)",
+      "exts": [".conf", ".ts", ".js", ".py"],
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "IAC-001",
+      "category": "IaC/Container",
+      "desc": "Dangerous Docker Socket Mounting",
+      "regex": "(?i)(/var/run/docker\\.sock)",
+      "exts": [".yml", ".yaml", ".sh", ".json", ".conf"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "IAC-002",
+      "category": "IaC/Container",
+      "desc": "Unpinned Mutable Container Base Tag (:latest)",
+      "regex": "(?i)^\\s*FROM\\s+[^\\s@]+:latest",
+      "exts": [".dockerfile", ""],
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "IAC-003",
+      "category": "IaC/Prowler",
+      "desc": "Privileged Container / Capability Escalation in K8s or Compose",
+      "regex": "(?i)(privileged\\s*:\\s*true|allowPrivilegeEscalation\\s*:\\s*true)",
+      "exts": [".yml", ".yaml", ".json"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "IAC-004",
+      "category": "IaC/Prowler",
+      "desc": "Host Namespace Sharing in Container / Pod (hostPID/hostNetwork)",
+      "regex": "(?i)(hostPID\\s*:\\s*true|hostNetwork\\s*:\\s*true|hostIPC\\s*:\\s*true)",
+      "exts": [".yml", ".yaml", ".json"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "IAC-005",
+      "category": "IaC/Prowler",
+      "desc": "Cloud Storage Public Read/Write ACL (S3/GCS/Azure)",
+      "regex": "(?i)(acl\\s*=\\s*['\"]public-read['\"]|acl\\s*=\\s*['\"]public-read-write['\"])",
+      "exts": [".tf", ".json", ".yml", ".yaml"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "IAC-006",
+      "category": "IaC/Prowler",
+      "desc": "Wildcard Administrator Privilege in Cloud IAM Policy",
+      "regex": "(?i)(\"Action\"\\s*:\\s*\"\\*\"\\s*,\\s*\"Resource\"\\s*:\\s*\"\\*\")",
+      "exts": [".json", ".tf", ".yml", ".yaml"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "NET-001",
+      "category": "Network/LateralMovement",
+      "desc": "Insecure Database / Cache Port Bound to All Interfaces (0.0.0.0)",
+      "regex": "^\\s*-\\s*['\"]?(0\\.0\\.0\\.0:)?(6379|27017|9200|5432|3306|2375):[0-9]+",
+      "exts": [".yml", ".yaml"],
+      "severity": "HIGH"
+    },
+    {
+      "id": "AI-001",
+      "category": "AI/Steganography",
+      "desc": "Hidden Zero-Width / RTL Cloaking in Prompt or Skill",
+      "regex": "[\\u200B-\\u200D\\uFEFF\\u202A-\\u202E]",
+      "exts": [".md", ".txt", ".prompt", ".json", ".yaml", ".yml"],
+      "severity": "CRITICAL"
+    },
+    {
+      "id": "AI-002",
+      "category": "AI/AgentSkill",
+      "desc": "Instruction Override / Prompt Injection in Skill Configuration",
+      "regex": "(?i)(ignore\\s+previous\\s+instructions|system\\s+prompt\\s+override|bypass\\s+safety\\s+filters|disregard\\s+prior\\s+directives)",
+      "exts": [".prompt", ".txt", ".yaml", ".yml", ".json"],
+      "severity": "HIGH"
+    }
+  ],
+  "required_headers": [
+    {
+      "name": "Strict-Transport-Security",
+      "description": "Enforces HTTPS and protects against SSL stripping",
+      "recommended_value": "max-age=63072000; includeSubDomains; preload"
+    },
+    {
+      "name": "X-Content-Type-Options",
+      "description": "Prevents MIME-sniffing attacks (must be 'nosniff')",
+      "recommended_value": "nosniff"
+    },
+    {
+      "name": "X-Frame-Options",
+      "description": "Prevents clickjacking framing (must be 'DENY' or 'SAMEORIGIN')",
+      "recommended_value": "DENY"
+    },
+    {
+      "name": "Content-Security-Policy",
+      "description": "Enforces strict script and asset boundary execution",
+      "recommended_value": "default-src 'none'; script-src 'self' 'nonce-{NONCE}'; style-src 'self' 'nonce-{NONCE}'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests; block-all-mixed-content;"
+    },
+    {
+      "name": "Referrer-Policy",
+      "description": "Controls referrer leakage across origins",
+      "recommended_value": "strict-origin-when-cross-origin"
+    },
+    {
+      "name": "Cross-Origin-Opener-Policy",
+      "description": "Isolates browsing context to protect against Spectre-style attacks",
+      "recommended_value": "same-origin"
+    },
+    {
+      "name": "Cross-Origin-Embedder-Policy",
+      "description": "Enforces cross-origin isolated environment for High-Resolution Timers",
+      "recommended_value": "require-corp"
+    },
+    {
+      "name": "Cross-Origin-Resource-Policy",
+      "description": "Prevents other origins from reading the response",
+      "recommended_value": "same-origin"
+    },
+    {
+      "name": "Permissions-Policy",
+      "description": "Restricts browser hardware APIs (camera, microphone, geolocation)",
+      "recommended_value": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=()"
+    }
+  ],
+  "fingerprint_headers": [
+    "Server",
+    "X-Powered-By",
+    "X-AspNet-Version",
+    "X-AspNetMvc-Version",
+    "X-Runtime",
+    "X-Version"
+  ],
+  "sensitive_perimeter_probes": [
+    {
+      "path": "/.git/HEAD",
+      "signature": "ref: refs/",
+      "alert": "Exposed Git Repository (VCS Leak)"
+    },
+    {
+      "path": "/.env",
+      "signature": "=",
+      "alert": "Plaintext Environment Variables (.env Leak)"
+    }
+  ],
+  "honeypot_routes": [
+    "/phpmyadmin",
+    "/wp-login.php",
+    "/xmlrpc.php",
+    "/.aws"
+  ],
+  "auth_rate_limiting": {
+    "threshold": 5,
+    "period_seconds": 60,
+    "mitigation_timeout_seconds": 900,
+    "endpoints": [
+      "/api/auth/login",
+      "/api/auth/token",
+      "/api/auth/reset-password",
+      "/api/v1/auth/login"
+    ]
+  }
+}

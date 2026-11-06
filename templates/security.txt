@@ -1,0 +1,32 @@
+# DEFCON-1 Military-Grade RFC 9116 Security Contact File
+# Place this file at: /.well-known/security.txt (and/or /security.txt)
+# Official Standard: https://www.rfc-editor.org/rfc/rfc9116
+#
+# RECOMMENDATION (RFC 9116, Section 3): This file SHOULD be PGP clear-text signed
+# to prevent spoofing of the security contact. Sign with:
+#   gpg --clearsign --armor security.txt
+# and deploy the signed version (.asc) alongside this file.
+#
+# MAINTENANCE NOTE: The 'Expires' field must be rotated at least annually.
+# Set a calendar reminder to update it before the expiration date.
+
+# Primary security contact email (MUST start with mailto: or https:)
+Contact: mailto:security@yourdomain.com
+
+# PGP Public Key URL for encrypted communication
+Encryption: https://yourdomain.com/pgp-key.txt
+
+# Canonical URL of this security.txt file
+Canonical: https://yourdomain.com/.well-known/security.txt
+
+# ISO 8601 Expiration Date (Mandatory in RFC 9116, max 1 year into future)
+Expires: 2027-12-31T23:59:59.000Z
+
+# Link to vulnerability disclosure and safe harbor policy
+Policy: https://yourdomain.com/security
+
+# Link to security acknowledgments / Hall of Fame
+Acknowledgments: https://yourdomain.com/security/hall-of-fame
+
+# Preferred communication languages (primary language listed first)
+Preferred-Languages: en, es

@@ -1,0 +1,136 @@
+name: DEFCON-1 Cyberdefense Gate
+
+on:
+  pull_request:
+    branches: [ main, master, develop ]
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 6 * * 1' # Weekly automated security audit
+
+permissions:
+  contents: read
+
+jobs:
+  codebase-audit:
+    name: Military-Grade Baseline & Diff Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify Project SSOT & Configuration Parity
+        run: |
+          python ./scripts/sync-and-validate.py --check
+
+      - name: Run DEFCON-1 Code Baseline Scanner
+        run: |
+          python ./scripts/check-security-baseline.py . --sarif security-report.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: security-report.sarif
+          category: defcon-code-defense
+
+  supply-chain-audit:
+    name: Google OSV Supply Chain & Dependency Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Google OSV-Scanner Action
+        uses: google/osv-scanner-action@v1.9.0
+        with:
+          scan-args: |-
+            --format=sarif
+            --output=osv-results.sarif
+            ./
+
+      - name: Upload OSV SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: osv-results.sarif
+          category: google-osv-supply-chain
+
+  container-and-iac-audit:
+    name: Aqua Trivy Container & IaC Misconfiguration Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Aqua Security Trivy (IaC & Dockerfile Scanner)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'config'
+          hide-progress: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: aqua-trivy-iac
+
+  verified-secrets-audit:
+    name: TruffleHog Live-Verified Secret Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog OSS (Active Key Verification - Pinned Version)
+        uses: trufflesecurity/trufflehog@v3.88.15
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+
+  agent-skills-audit:
+    name: NVIDIA SkillSpector & Agent Skill Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Audit Agent Skills & Prompts (Steganography & Injection Focus)
+        run: |
+          python3 ./scripts/check-security-baseline.py . --sarif skills-audit.sarif
+
+      - name: Upload Agent Skills SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: skills-audit.sarif
+          category: agent-skills-defense

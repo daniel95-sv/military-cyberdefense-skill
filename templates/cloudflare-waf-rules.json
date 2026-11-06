@@ -1,0 +1,30 @@
+{
+  "description": "Hardened Cloudflare WAF, Rate Limiting, and Firewall rules for production applications.",
+  "rules": [
+    {
+      "name": "Block Malicious Bots & Threat Scores",
+      "expression": "(cf.threat_score gt 20) or (cf.bot_management.score lt 20 and not cf.bot_management.verified_bot)",
+      "action": "managed_challenge",
+      "description": "Challenges suspicious traffic, automated headless scrapers, and known bad IPs."
+    },
+    {
+      "name": "Block Obvious Honeypot & Reconnaissance Paths",
+      "expression": "(http.request.uri.path contains \"/phpmyadmin\") or (http.request.uri.path contains \"/.env\") or (http.request.uri.path contains \"/.git\") or (http.request.uri.path contains \"/wp-login.php\")",
+      "action": "block",
+      "description": "Instantly drops connections scanning for common admin panels, git metadata, and environment files."
+    },
+    {
+      "name": "Rate Limit Authentication Endpoints",
+      "expression": "(http.request.uri.path in {\"/api/auth/login\" \"/api/auth/token\" \"/api/auth/reset-password\"})",
+      "action": "rate_limit",
+      "rate_limit_params": {
+        "threshold": 5,
+        "period": 60,
+        "action": "block",
+        "timeout": 900
+      },
+      "description": "Restricts login attempts to 5 per minute per IP, blocking for 15 minutes upon violation."
+    }
+  ]
+}
+

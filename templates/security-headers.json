@@ -1,0 +1,29 @@
+{
+  "description": "Production-ready, military-grade HTTP security headers for web servers, proxies, and edge CDNs, including server fingerprinting removal.",
+  "headers": {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=()",
+    "_note_csp": "IMPORTANT: Replace {NONCE} with a cryptographically random, per-request server-generated nonce (e.g., crypto.randomBytes(16).toString('base64')). Never reuse nonces across requests.",
+    "Content-Security-Policy": "default-src 'none'; script-src 'self' 'nonce-{NONCE}'; style-src 'self' 'nonce-{NONCE}'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests; block-all-mixed-content;"
+  },
+  "strip_fingerprinting": [
+    "Server",
+    "X-AspNet-Version",
+    "X-AspNetMvc-Version",
+    "X-Powered-By",
+    "X-Runtime",
+    "X-Version"
+  ],
+  "snippets": {
+    "express_js": "app.disable('x-powered-by');",
+    "nginx": "# Strip server tokens and fingerprinting\nserver_tokens off;\nproxy_hide_header X-Powered-By;\nproxy_hide_header Server;\n\n# Add defensive security headers\nadd_header Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\" always;\nadd_header X-Content-Type-Options \"nosniff\" always;\nadd_header X-Frame-Options \"DENY\" always;\nadd_header Referrer-Policy \"strict-origin-when-cross-origin\" always;\nadd_header Cross-Origin-Opener-Policy \"same-origin\" always;\nadd_header Cross-Origin-Embedder-Policy \"require-corp\" always;\nadd_header Cross-Origin-Resource-Policy \"same-origin\" always;\nadd_header Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;",
+    "caddy": "header {\n    -Server\n    -X-Powered-By\n    Strict-Transport-Security \"max-age=63072000; includeSubDomains; preload\"\n    X-Content-Type-Options \"nosniff\"\n    X-Frame-Options \"DENY\"\n    Referrer-Policy \"strict-origin-when-cross-origin\"\n    Cross-Origin-Opener-Policy \"same-origin\"\n    Cross-Origin-Embedder-Policy \"require-corp\"\n    Cross-Origin-Resource-Policy \"same-origin\"\n    Permissions-Policy \"camera=(), microphone=(), geolocation=()\"\n}",
+    "next_config_js": "// next.config.js\nmodule.exports = {\n  poweredByHeader: false, // Disables X-Powered-By: Next.js\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },\n          { key: 'X-Content-Type-Options', value: 'nosniff' },\n          { key: 'X-Frame-Options', value: 'DENY' },\n          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },\n          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },\n          { key: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },\n          { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },\n          // NOTE: CSP with nonce requires a custom Next.js middleware to inject per-request nonces.\n          // See: https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy\n          { key: 'Content-Security-Policy', value: \"default-src 'none'; script-src 'self' 'nonce-{NONCE}'; style-src 'self' 'nonce-{NONCE}'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';\" }\n        ]\n      }\n    ];\n  }\n};"
+  }
+}

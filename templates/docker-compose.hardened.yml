@@ -1,0 +1,117 @@
+# DEFCON-1 Military-Grade Docker Compose Hardening Template
+# Enforces Zero Trust, Least Privilege, Immutable Filesystem, and Anti-Lateral Movement controls.
+# Conforms to Aqua Trivy, CIS Docker Benchmark, and Prowler container rules.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.hardened
+    container_name: hardened-app
+    restart: unless-stopped
+
+    # 1. Non-root unprivileged execution
+    user: "10001:10001"
+
+    # 2. Immutable filesystem & ephemeral scratch space
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /app/tmp:rw,noexec,nosuid,size=32m
+
+    # 3. Kernel privilege suppression & capability dropping
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # 4. Anti-Lateral Movement: Localhost loopback binding ONLY (Never 0.0.0.0)
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://:CHANGE_TO_COMPLEX_SECRET@redis:6379
+      - DATABASE_URL=postgresql://appuser:CHANGE_TO_COMPLEX_SECRET@postgres:5432/appdb?sslmode=require
+
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - internal-net
+
+  redis:
+    image: redis:7-alpine@sha256:c9417d91e6cbe5c0d6ec34da075c3f68383e580e66ee7c1c16ac17721867c050
+    container_name: hardened-redis
+    restart: unless-stopped
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # CRITICAL: Require authentication & disable dangerous introspection commands
+    command: >
+      redis-server
+      --requirepass CHANGE_TO_COMPLEX_SECRET
+      --rename-command FLUSHALL ""
+      --rename-command FLUSHDB ""
+      --rename-command CONFIG ""
+      --rename-command DEBUG ""
+      --protected-mode yes
+    # Do NOT expose Redis port on host unless needed for debugging (loopback only)
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "CHANGE_TO_COMPLEX_SECRET", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - internal-net
+
+  postgres:
+    image: postgres:16-alpine@sha256:b1d752adab53e5e1a1ee5d97ad48483f84e4f8d97561f7db91386d34e6281be2
+    container_name: hardened-postgres
+    restart: unless-stopped
+    user: "70:70"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    environment:
+      - POSTGRES_USER=appuser
+      - POSTGRES_PASSWORD=CHANGE_TO_COMPLEX_SECRET
+      - POSTGRES_DB=appdb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Bind to loopback only if external DBA access is required
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - internal-net
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  internal-net:
+    driver: bridge
+    internal: false # Set to true if services require zero external outbound internet
+

@@ -1,0 +1,63 @@
+# DEFCON-1 Hardened .dockerignore
+# Prevents sensitive files, local environment secrets, VCS history,
+# and unnecessary dependencies from entering the Docker build context.
+
+# Secrets and local environments (NEVER bake into image)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+
+# Version Control & IDEs
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.sublime-project
+*.sublime-workspace
+
+# Build artifacts & dependencies
+node_modules
+dist
+build
+out
+.next
+.nuxt
+coverage
+.nyc_output
+target
+bin
+obj
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+venv
+env
+
+# Logs and runtime caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn
+.cache
+
+# Documentation and design assets
+*.md
+!README.md
+docs
+screenshots
+*.drawio
+*.fig
+

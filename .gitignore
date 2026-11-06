@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local scanning artifacts and reports
+*.sarif
+baseline.json
+fim-manifest.json
+report.json
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environments
+.env.local
+.venv/
+env/
+venv/

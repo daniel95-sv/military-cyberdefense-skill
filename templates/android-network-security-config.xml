@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 
+  DEFCON-1 Android Network Security Configuration
+  Enforces zero cleartext traffic and intermediate CA public key pinning.
+-->
+<network-security-config>
+    <!-- Completely disable unencrypted HTTP across the entire application -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- User-installed CAs are explicitly rejected to block proxy sniffing -->
+        </trust-anchors>
+    </base-config>
+
+    <domain-config>
+        <domain includeSubdomains="true">api.yourdomain.com</domain>
+        <!-- SPKI Public Key Pinning (SHA-256) -->
+        <pin-set expiration="2027-12-31">
+            <!-- Replace with your primary leaf/intermediate CA SPKI pin -->
+            <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+            <!-- Mandatory backup pin to avoid app lockouts upon certificate rollover -->
+            <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>
+
