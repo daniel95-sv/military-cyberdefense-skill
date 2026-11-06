@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Aqua Security Trivy (IaC & Dockerfile Configuration Scanner)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # v0.36.0
         with:
           scan-type: 'config'
           hide-progress: true
@@ -130,7 +130,7 @@ jobs:
           category: aqua-trivy-iac
 
       - name: Run Aqua Security Trivy (Filesystem Package & Dependency Vulnerability Scanner)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # v0.36.0
         with:
           scan-type: 'fs'
           hide-progress: true
@@ -146,7 +146,7 @@ jobs:
           category: aqua-trivy-filesystem
 
       - name: Generate CycloneDX SBOM (Software Bill of Materials)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # v0.36.0
         with:
           scan-type: 'fs'
           format: 'cyclonedx'
