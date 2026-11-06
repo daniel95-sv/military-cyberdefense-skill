@@ -65,7 +65,7 @@ jobs:
           python ./scripts/check-security-baseline.py . --sarif security-report.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: security-report.sarif
@@ -94,7 +94,7 @@ jobs:
           python ./scripts/check-dependencies-osv.py . --sarif osv-results.sarif
 
       - name: Upload OSV SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: osv-results.sarif
@@ -123,7 +123,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -166,7 +166,7 @@ jobs:
           python3 ./scripts/check-security-baseline.py . --sarif skills-audit.sarif
 
       - name: Upload Agent Skills SARIF
-        uses: github/codeql-action/upload-sarif@b56ba9ba5b403b5608d1b3242fde5d5e22e39883 # v3.28.10
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: skills-audit.sarif
