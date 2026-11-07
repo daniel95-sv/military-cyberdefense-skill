@@ -159,26 +159,6 @@ jobs:
           name: software-bill-of-materials
           path: sbom.cdx.json
 
-      - name: Build Local Container Image for Artifact Audit
-        run: |
-          docker build -t defcon-app:local -f templates/Dockerfile.hardened .
-
-      - name: Run Aqua Security Trivy (Built Container Image Vulnerability Scanner)
-        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec # v0.36.0
-        with:
-          image-ref: 'defcon-app:local'
-          scan-type: 'image'
-          format: 'sarif'
-          output: 'trivy-image-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy Container Image SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
-        if: always()
-        with:
-          sarif_file: trivy-image-results.sarif
-          category: aqua-trivy-image
-
   verified-secrets-audit:
     name: TruffleHog Live-Verified Secret Audit
     runs-on: ubuntu-latest

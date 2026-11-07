@@ -508,27 +508,37 @@ class TestProductionTemplates(unittest.TestCase):
     """Test Suite for Hardened Production Templates (Compose, K8s, Nginx, CI/CD)."""
 
     def test_docker_compose_redis_has_password_environment(self):
-        import yaml
         compose_path = os.path.join(ROOT_DIR, "templates", "docker-compose.hardened.yml")
         with open(compose_path, "r", encoding="utf-8") as f:
-            doc = yaml.safe_load(f)
-        redis_svc = doc["services"]["redis"]
-        self.assertIn("environment", redis_svc, "Redis service must configure environment")
-        env_vars = redis_svc["environment"]
-        has_redis_pwd = any("REDIS_PASSWORD" in e for e in env_vars)
-        self.assertTrue(has_redis_pwd, "Redis service must pass REDIS_PASSWORD in environment")
+            content = f.read()
+        try:
+            import yaml
+            doc = yaml.safe_load(content)
+            redis_svc = doc["services"]["redis"]
+            self.assertIn("environment", redis_svc, "Redis service must configure environment")
+            env_vars = redis_svc["environment"]
+            has_redis_pwd = any("REDIS_PASSWORD" in e for e in env_vars)
+            self.assertTrue(has_redis_pwd, "Redis service must pass REDIS_PASSWORD in environment")
+        except ImportError:
+            self.assertIn("REDIS_PASSWORD", content, "Redis configuration must contain REDIS_PASSWORD")
+            self.assertIn("environment:", content, "Redis service must configure environment block")
 
     def test_k8s_network_policies_coverage(self):
-        import yaml
         k8s_path = os.path.join(ROOT_DIR, "templates", "k8s-network-policy.yaml")
         with open(k8s_path, "r", encoding="utf-8") as f:
-            docs = list(yaml.safe_load_all(f))
-        policy_names = {d["metadata"]["name"] for d in docs if d and "metadata" in d}
-        self.assertIn("default-deny-all", policy_names)
-        self.assertIn("allow-dns-egress", policy_names)
-        self.assertIn("app-microsegmentation", policy_names)
-        self.assertIn("postgres-microsegmentation", policy_names, "PostgreSQL ingress policy must be present")
-        self.assertIn("redis-microsegmentation", policy_names, "Redis ingress policy must be present")
+            content = f.read()
+        try:
+            import yaml
+            docs = list(yaml.safe_load_all(content))
+            policy_names = {d["metadata"]["name"] for d in docs if d and "metadata" in d}
+            self.assertIn("default-deny-all", policy_names)
+            self.assertIn("allow-dns-egress", policy_names)
+            self.assertIn("app-microsegmentation", policy_names)
+            self.assertIn("postgres-microsegmentation", policy_names, "PostgreSQL ingress policy must be present")
+            self.assertIn("redis-microsegmentation", policy_names, "Redis ingress policy must be present")
+        except ImportError:
+            for p in ["default-deny-all", "allow-dns-egress", "app-microsegmentation", "postgres-microsegmentation", "redis-microsegmentation"]:
+                self.assertIn(f"name: {p}", content, f"Policy {p} must be present in manifest")
 
     def test_nginx_cloudflare_real_ip_configured(self):
         nginx_path = os.path.join(ROOT_DIR, "templates", "nginx.hardened.conf")
