@@ -65,7 +65,7 @@ jobs:
           python ./scripts/check-security-baseline.py . --sarif security-report.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always()
         with:
           sarif_file: security-report.sarif
@@ -94,7 +94,7 @@ jobs:
           python ./scripts/check-dependencies-osv.py . --sarif osv-results.sarif
 
       - name: Upload OSV SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always()
         with:
           sarif_file: osv-results.sarif
@@ -123,7 +123,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy IaC SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always()
         with:
           sarif_file: trivy-config-results.sarif
@@ -139,7 +139,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy Filesystem SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always()
         with:
           sarif_file: trivy-fs-results.sarif
@@ -196,7 +196,7 @@ jobs:
           python3 ./scripts/check-security-baseline.py . --sarif skills-audit.sarif
 
       - name: Upload Agent Skills SARIF
-        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always()
         with:
           sarif_file: skills-audit.sarif
